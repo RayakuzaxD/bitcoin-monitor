@@ -1,6 +1,6 @@
 # Bitcoin Monitor
 
-Monitor completo de Bitcoin para Windows, com painel de mercado, rede Bitcoin, noticias, alertas e indicadores tecnicos.
+Monitor profissional de Bitcoin para Windows, com painel de mercado, rede Bitcoin, noticias, alertas, indicadores tecnicos e dados publicos de derivativos.
 
 ## Como rodar no Windows
 
@@ -22,6 +22,28 @@ Tambem existe um atalho simples:
 run_windows_app.bat
 ```
 
+## Recursos atuais
+
+- Painel principal com BTC/USD, BTC/BRL, variacao 24h, 7D e 30D, dominancia BTC, market cap, volume, spread e order book.
+- Aba Indicadores com visao semanal e mensal, grafico interativo e camadas selecionaveis.
+- Indicadores tecnicos: MM50, MM100, MM200, EMA21, EMA50, Bollinger, Keltner, Donchian, Ichimoku, RSI14, MACD, ATR14, ADX14, Stoch RSI, MFI, OBV, VWMA20 e volume.
+- Aba Derivativos com funding, funding anualizado, basis mark/index, open interest, OI 7D/30D, long/short ratio, taker buy/sell e opcoes Deribit.
+- Aba Rede com mempool, fees, blocos projetados, altura do bloco e ajuste de dificuldade.
+- Aba Noticias com RSS publico, deduplicacao, classificacao por tema e leitura de impacto.
+- Alertas locais para preco, variacao, fees, mempool, funding, open interest e long/short.
+- Cache local em SQLite para reduzir rate limit e manter dados recentes quando alguma fonte publica falhar.
+- Auto-update por manifesto versionado, com validacao SHA-256 antes de instalar.
+
+## Fontes de dados
+
+- Binance Spot API: candles, ticker e livro de ofertas.
+- Binance USDS-M Futures API: funding, premium index, open interest, long/short e taker buy/sell.
+- Deribit public API: resumo de opcoes BTC.
+- CoinGecko API: preco agregado, BTC/BRL, market cap, volume, dominancia e variacoes 1h/24h/7d/30d.
+- mempool.space API: fees, mempool, blocos projetados, altura do bloco e ajuste de dificuldade.
+- Alternative.me: Fear & Greed Index.
+- RSS: Cointelegraph BR, CoinDesk, Bitcoin Magazine, Bitcoin Optech, Decrypt e CryptoSlate.
+
 ## Gerar release
 
 No diretorio do projeto:
@@ -36,65 +58,56 @@ Esse comando gera:
 dist\BitcoinMonitor.exe
 release\BitcoinMonitor.exe
 release\update_manifest.json
+BitcoinMonitor-v0.3.0-release.zip
 ```
 
 ## Auto-update
 
-O app ja tem a base de auto-update:
+O app usa esta URL fixa para o manifesto de atualizacao:
 
-1. Publicar `release\BitcoinMonitor.exe` em um GitHub Release.
-2. Publicar `release\update_manifest.json` em uma URL publica.
-3. Configurar a URL do manifesto no app.
+```text
+https://github.com/RayakuzaxD/bitcoin-monitor/releases/latest/download/update_manifest.json
+```
 
 O manifesto tem este formato:
 
 ```json
 {
-  "version": "0.2.0",
-  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.2.0",
-  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.2.0/BitcoinMonitor.exe",
+  "version": "0.3.0",
+  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.3.0",
+  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.3.0/BitcoinMonitor.exe",
   "sha256": "...",
   "notes": ["Notas da versao"]
 }
 ```
 
-Formas de configurar o manifesto:
+Tambem e possivel sobrescrever a URL por:
 
 - Variavel de ambiente `BITCOIN_MONITOR_UPDATE_URL`.
 - Arquivo `%APPDATA%\BitcoinMonitor\update_config.json`.
 - Arquivo `update_config.json` ao lado do executavel.
-- Recompilar com `DEFAULT_UPDATE_MANIFEST_URL` preenchido no codigo.
 
-Modelo:
+## Publicacao
 
-```text
-update_config.template.json
+O workflow `.github/workflows/windows-release.yml` cria o executavel em Windows, gera manifesto, cria o zip e publica os assets na release do GitHub quando uma tag `v*` e enviada.
+
+Para publicar manualmente a proxima versao:
+
+```powershell
+.\build_windows_exe.ps1
+gh release create v0.3.0 release\BitcoinMonitor.exe BitcoinMonitor-v0.3.0-release.zip release\update_manifest.json --title v0.3.0 --notes-file release\update_manifest.json
 ```
 
-## Recursos atuais
+## Arquivos locais
 
-- Aba Painel com preco BTC/USD e BTC/BRL, candles, order book, mempool, fees, altura do bloco e alertas.
-- Aba Indicadores com visao semanal e mensal.
-- Grafico interativo com camadas selecionaveis: MM50, MM100, MM200, Bollinger e Volume.
-- Hover no grafico com OHLC, volume e indicadores do candle.
-- RSI 14, MACD, volume atual e comparacao com volume medio.
-- Aba Noticias com Cointelegraph BR, CoinDesk e Bitcoin Magazine via RSS.
-- Aba Atualizacao com checagem de nova versao via manifesto.
-- Alertas locais salvos em `%APPDATA%\BitcoinMonitor\alerts.json`.
+O app grava dados do usuario em:
 
-## Fontes de dados
+```text
+%APPDATA%\BitcoinMonitor\
+```
 
-- Binance Spot API: candles e livro de ofertas.
-- CoinGecko API: preco agregado, BTC/BRL, volume e market cap.
-- mempool.space API: fees, mempool, bloco atual e ajuste de dificuldade.
-- Alternative.me: Fear & Greed Index.
-- RSS: Cointelegraph BR, CoinDesk e Bitcoin Magazine.
+Principais arquivos:
 
-## Proximos passos
-
-1. Publicar o repositorio no GitHub.
-2. Criar o primeiro GitHub Release `v0.2.0`.
-3. Subir `BitcoinMonitor.exe` como asset da release.
-4. Ajustar `update_manifest.json` com URLs reais.
-5. Publicar o manifesto em uma URL fixa.
-6. Recompilar o app com `DEFAULT_UPDATE_MANIFEST_URL` real ou distribuir `update_config.json`.
+- `alerts.json`: alertas locais.
+- `bitcoin_monitor.db`: cache HTTP, snapshots e noticias recentes.
+- `update_config.json`: URL customizada de manifesto, quando existir.

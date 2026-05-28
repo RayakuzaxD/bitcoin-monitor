@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -26,11 +27,12 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "Bitcoin Monitor"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
+DB_FILE = APP_DIR / "bitcoin_monitor.db"
 UPDATE_CONFIG_FILE = APP_DIR / "update_config.json"
-DEFAULT_UPDATE_MANIFEST_URL = "https://api.github.com/repos/RayakuzaxD/bitcoin-monitor/contents/release/update_manifest.json?ref=main"
+DEFAULT_UPDATE_MANIFEST_URL = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/latest/download/update_manifest.json"
 
 ENDPOINTS = {
     "coingecko": (
@@ -38,22 +40,85 @@ ENDPOINTS = {
         "?ids=bitcoin&vs_currencies=usd,brl"
         "&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true"
     ),
+    "coingecko_markets": (
+        "https://api.coingecko.com/api/v3/coins/markets"
+        "?vs_currency=usd&ids=bitcoin"
+        "&price_change_percentage=1h,24h,7d,30d,1y"
+        "&sparkline=false"
+    ),
+    "coingecko_global": "https://api.coingecko.com/api/v3/global",
     "binance_ticker": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
     "candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={interval}&limit=180",
     "weekly_candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&limit=500",
     "monthly_candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1M&limit=240",
     "depth": "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20",
     "fees": "https://mempool.space/api/v1/fees/recommended",
+    "mempool_blocks": "https://mempool.space/api/v1/fees/mempool-blocks",
     "mempool": "https://mempool.space/api/mempool",
     "tip_height": "https://mempool.space/api/blocks/tip/height",
     "difficulty": "https://mempool.space/api/v1/difficulty-adjustment",
     "fear_greed": "https://api.alternative.me/fng/?limit=1",
+    "futures_open_interest": "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT",
+    "futures_funding": "https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=8",
+    "futures_premium": "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+    "futures_open_interest_hist": (
+        "https://fapi.binance.com/futures/data/openInterestHist"
+        "?symbol=BTCUSDT&period=1d&limit=30"
+    ),
+    "futures_long_short": (
+        "https://fapi.binance.com/futures/data/topLongShortPositionRatio"
+        "?symbol=BTCUSDT&period=1d&limit=30"
+    ),
+    "futures_taker_ratio": (
+        "https://fapi.binance.com/futures/data/takerlongshortRatio"
+        "?symbol=BTCUSDT&period=1d&limit=30"
+    ),
+    "deribit_options": (
+        "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
+        "?currency=BTC&kind=option"
+    ),
 }
 
 NEWS_FEEDS = [
     ("Cointelegraph BR", "https://cointelegraph.com.br/rss/tag/bitcoin"),
     ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
     ("Bitcoin Magazine", "https://bitcoinmagazine.com/.rss/full/"),
+    ("Bitcoin Optech", "https://bitcoinops.org/feed.xml"),
+    ("Decrypt", "https://decrypt.co/feed"),
+    ("CryptoSlate", "https://cryptoslate.com/feed/"),
+]
+
+CACHE_TTLS = {
+    "coingecko": 35,
+    "coingecko_markets": 90,
+    "coingecko_global": 300,
+    "binance_ticker": 15,
+    "candles": 30,
+    "weekly_candles": 10_800,
+    "monthly_candles": 21_600,
+    "depth": 15,
+    "fees": 30,
+    "mempool_blocks": 30,
+    "mempool": 30,
+    "tip_height": 20,
+    "difficulty": 600,
+    "fear_greed": 3_600,
+    "futures_open_interest": 45,
+    "futures_funding": 300,
+    "futures_premium": 45,
+    "futures_open_interest_hist": 600,
+    "futures_long_short": 600,
+    "futures_taker_ratio": 600,
+    "deribit_options": 300,
+}
+
+NEWS_CATEGORIES = [
+    ("ETF/Institucional", ["etf", "blackrock", "fidelity", "strategy", "treasury", "tesouraria"]),
+    ("Regulacao", ["sec", "cvm", "regulation", "regulacao", "regulador", "lei", "law", "ban", "tax"]),
+    ("Macro", ["fed", "fomc", "cpi", "inflation", "inflacao", "dxy", "rates", "juros"]),
+    ("Mineracao", ["miner", "mining", "mineracao", "hashrate", "difficulty", "halving"]),
+    ("Rede/On-chain", ["mempool", "lightning", "taproot", "ordinals", "inscriptions", "wallet", "node"]),
+    ("Derivativos", ["funding", "futures", "options", "open interest", "liquidation", "derivatives"]),
 ]
 
 COLORS = {
@@ -85,6 +150,9 @@ METRICS = {
     "Variacao 24h %": "change_24h",
     "Fee rapida sat/vB": "fee_fastest",
     "Mempool vMB": "mempool_vmb",
+    "Funding %": "funding_rate_pct",
+    "Open interest USD": "open_interest_usd",
+    "Long/Short ratio": "long_short_ratio",
 }
 
 
@@ -92,7 +160,7 @@ def fetch_json(url, timeout=10):
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "BitcoinMonitor/1.0 (+https://localhost)",
+            "User-Agent": f"BitcoinMonitor/{APP_VERSION} (+https://github.com/RayakuzaxD/bitcoin-monitor)",
             "Accept": "application/json,text/plain,*/*",
         },
     )
@@ -104,7 +172,7 @@ def fetch_json(url, timeout=10):
 def fetch_text(url, timeout=10):
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "BitcoinMonitor/1.0 (+https://localhost)"},
+        headers={"User-Agent": f"BitcoinMonitor/{APP_VERSION} (+https://github.com/RayakuzaxD/bitcoin-monitor)"},
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8-sig").strip()
@@ -120,10 +188,166 @@ def fetch_update_manifest(url, timeout=15):
 
 
 def download_file(url, destination, timeout=60):
-    request = urllib.request.Request(url, headers={"User-Agent": "BitcoinMonitor/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": f"BitcoinMonitor/{APP_VERSION}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         with open(destination, "wb") as file:
             shutil.copyfileobj(response, file)
+
+
+class LocalStore:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.lock = threading.Lock()
+        self.ensure_schema()
+
+    def connect(self):
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        return sqlite3.connect(self.path, timeout=8)
+
+    def ensure_schema(self):
+        with self.lock:
+            with self.connect() as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS http_cache (
+                        cache_key TEXT PRIMARY KEY,
+                        fetched_at REAL NOT NULL,
+                        payload TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS market_snapshots (
+                        created_at REAL NOT NULL,
+                        metrics_json TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS news_items (
+                        link TEXT PRIMARY KEY,
+                        source TEXT,
+                        title TEXT,
+                        summary TEXT,
+                        category TEXT,
+                        impact TEXT,
+                        published TEXT,
+                        saved_at REAL NOT NULL
+                    )
+                    """
+                )
+
+    def get_cache(self, cache_key, max_age=None):
+        with self.lock:
+            with self.connect() as connection:
+                row = connection.execute(
+                    "SELECT fetched_at, payload FROM http_cache WHERE cache_key = ?",
+                    (cache_key,),
+                ).fetchone()
+        if not row:
+            return None
+        fetched_at, payload = row
+        if max_age is not None and time.time() - fetched_at > max_age:
+            return None
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+
+    def set_cache(self, cache_key, payload):
+        with self.lock:
+            with self.connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO http_cache(cache_key, fetched_at, payload)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(cache_key) DO UPDATE SET
+                        fetched_at = excluded.fetched_at,
+                        payload = excluded.payload
+                    """,
+                    (cache_key, time.time(), json.dumps(payload)),
+                )
+
+    def save_market_snapshot(self, metrics):
+        packed = json.dumps(metrics, sort_keys=True)
+        with self.lock:
+            with self.connect() as connection:
+                connection.execute(
+                    "INSERT INTO market_snapshots(created_at, metrics_json) VALUES (?, ?)",
+                    (time.time(), packed),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM market_snapshots
+                    WHERE rowid NOT IN (
+                        SELECT rowid FROM market_snapshots ORDER BY created_at DESC LIMIT 2500
+                    )
+                    """
+                )
+
+    def save_news(self, items):
+        with self.lock:
+            with self.connect() as connection:
+                for item in items:
+                    published = item.get("published")
+                    if isinstance(published, dt.datetime):
+                        published = published.isoformat()
+                    connection.execute(
+                        """
+                        INSERT INTO news_items(
+                            link, source, title, summary, category, impact, published, saved_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(link) DO UPDATE SET
+                            source = excluded.source,
+                            title = excluded.title,
+                            summary = excluded.summary,
+                            category = excluded.category,
+                            impact = excluded.impact,
+                            published = excluded.published,
+                            saved_at = excluded.saved_at
+                        """,
+                        (
+                            item.get("link") or item.get("title"),
+                            item.get("source"),
+                            item.get("title"),
+                            item.get("summary"),
+                            item.get("category"),
+                            item.get("impact"),
+                            published,
+                            time.time(),
+                        ),
+                    )
+
+    def load_news(self, limit=40):
+        with self.lock:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT source, title, summary, category, impact, published, link
+                    FROM news_items
+                    ORDER BY COALESCE(published, '') DESC, saved_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        items = []
+        for source, title, summary, category, impact, published, link in rows:
+            items.append(
+                {
+                    "source": source or "Cache",
+                    "title": title or "Sem titulo",
+                    "summary": summary or "",
+                    "category": category or "Mercado",
+                    "impact": impact or "normal",
+                    "published": BitcoinMonitorApp.parse_date(published) if published else None,
+                    "link": link or "",
+                    "cached": True,
+                }
+            )
+        return items
 
 
 def format_currency(value, currency="USD", decimals=2):
@@ -153,11 +377,52 @@ def format_number(value, decimals=2):
     return f"{value:,.{decimals}f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
+def format_compact_number(value, decimals=2):
+    if value is None or not math.isfinite(value):
+        return "--"
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.{decimals}f} bi".replace(".", ",")
+    if abs_value >= 1_000_000:
+        return f"{value / 1_000_000:.{decimals}f} mi".replace(".", ",")
+    if abs_value >= 1_000:
+        return f"{value / 1_000:.{decimals}f} mil".replace(".", ",")
+    return format_number(value, decimals)
+
+
 def format_percent(value):
     if value is None or not math.isfinite(value):
         return "--"
     sign = "+" if value > 0 else ""
     return f"{sign}{format_number(value, 2)}%"
+
+
+def format_btc(value):
+    if value is None or not math.isfinite(value):
+        return "--"
+    return f"{format_number(value, 2)} BTC"
+
+
+def format_timestamp_ms(value):
+    try:
+        if not value:
+            return "--"
+        return dt.datetime.fromtimestamp(float(value) / 1000).strftime("%d/%m %H:%M")
+    except Exception:
+        return "--"
+
+
+def format_duration_ms(value):
+    try:
+        seconds = max(0, int(float(value) / 1000))
+    except Exception:
+        return "--"
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    if hours >= 24:
+        days = hours // 24
+        return f"{days}d {hours % 24}h"
+    return f"{hours}h {minutes}m"
 
 
 def metric_value_label(metric, value):
@@ -171,6 +436,12 @@ def metric_value_label(metric, value):
         return f"{format_number(value, 0)} sat/vB"
     if metric == "mempool_vmb":
         return f"{format_number(value, 1)} vMB"
+    if metric == "funding_rate_pct":
+        return format_percent(value)
+    if metric == "open_interest_usd":
+        return format_compact_currency(value, "USD")
+    if metric == "long_short_ratio":
+        return format_number(value, 2)
     return format_number(value, 2)
 
 
@@ -279,6 +550,236 @@ def macd_value(values):
     return macd_latest, signal_latest, macd_latest - signal_latest
 
 
+def last_valid(values):
+    for value in reversed(values):
+        if value is not None:
+            return value
+    return None
+
+
+def rolling_vwma(closes, volumes, period):
+    output = []
+    for index in range(len(closes)):
+        if index < period - 1:
+            output.append(None)
+            continue
+        price_volume = 0
+        volume_total = 0
+        for offset in range(index - period + 1, index + 1):
+            price_volume += closes[offset] * volumes[offset]
+            volume_total += volumes[offset]
+        output.append(price_volume / volume_total if volume_total else None)
+    return output
+
+
+def true_range_series(candles):
+    output = []
+    for index, candle in enumerate(candles):
+        if index == 0:
+            output.append(candle["high"] - candle["low"])
+            continue
+        previous_close = candles[index - 1]["close"]
+        output.append(
+            max(
+                candle["high"] - candle["low"],
+                abs(candle["high"] - previous_close),
+                abs(candle["low"] - previous_close),
+            )
+        )
+    return output
+
+
+def atr_series(candles, period=14):
+    ranges = true_range_series(candles)
+    if not ranges:
+        return []
+    output = []
+    atr = None
+    for index, value in enumerate(ranges):
+        if index < period - 1:
+            output.append(None)
+            continue
+        if atr is None:
+            atr = sum(ranges[index - period + 1 : index + 1]) / period
+        else:
+            atr = ((atr * (period - 1)) + value) / period
+        output.append(atr)
+    return output
+
+
+def rsi_series(values, period=14):
+    if len(values) <= period:
+        return [None] * len(values)
+    output = [None] * len(values)
+    gains = []
+    losses = []
+    for index in range(1, period + 1):
+        change = values[index] - values[index - 1]
+        gains.append(max(change, 0))
+        losses.append(abs(min(change, 0)))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    output[period] = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    for index in range(period + 1, len(values)):
+        change = values[index] - values[index - 1]
+        gain = max(change, 0)
+        loss = abs(min(change, 0))
+        avg_gain = ((avg_gain * (period - 1)) + gain) / period
+        avg_loss = ((avg_loss * (period - 1)) + loss) / period
+        output[index] = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    return output
+
+
+def stoch_rsi_value(values, rsi_period=14, stoch_period=14):
+    series = [item for item in rsi_series(values, rsi_period) if item is not None]
+    if len(series) < stoch_period:
+        return None
+    window = series[-stoch_period:]
+    low = min(window)
+    high = max(window)
+    if high == low:
+        return 50
+    return ((series[-1] - low) / (high - low)) * 100
+
+
+def adx_value(candles, period=14):
+    if len(candles) < period * 2 + 1:
+        return None
+    trs = []
+    plus_dm = []
+    minus_dm = []
+    for index in range(1, len(candles)):
+        current = candles[index]
+        previous = candles[index - 1]
+        up_move = current["high"] - previous["high"]
+        down_move = previous["low"] - current["low"]
+        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
+        minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
+        trs.append(
+            max(
+                current["high"] - current["low"],
+                abs(current["high"] - previous["close"]),
+                abs(current["low"] - previous["close"]),
+            )
+        )
+    atr = sum(trs[:period])
+    plus = sum(plus_dm[:period])
+    minus = sum(minus_dm[:period])
+    dx_values = []
+    for index in range(period, len(trs)):
+        atr = atr - (atr / period) + trs[index]
+        plus = plus - (plus / period) + plus_dm[index]
+        minus = minus - (minus / period) + minus_dm[index]
+        if atr == 0:
+            continue
+        plus_di = 100 * (plus / atr)
+        minus_di = 100 * (minus / atr)
+        total = plus_di + minus_di
+        if total:
+            dx_values.append(100 * abs(plus_di - minus_di) / total)
+    if len(dx_values) < period:
+        return None
+    return sum(dx_values[-period:]) / period
+
+
+def obv_series(candles):
+    output = []
+    total = 0
+    for index, candle in enumerate(candles):
+        if index == 0:
+            output.append(total)
+            continue
+        if candle["close"] > candles[index - 1]["close"]:
+            total += candle["volume"]
+        elif candle["close"] < candles[index - 1]["close"]:
+            total -= candle["volume"]
+        output.append(total)
+    return output
+
+
+def mfi_value(candles, period=14):
+    if len(candles) <= period:
+        return None
+    positive = 0
+    negative = 0
+    for index in range(len(candles) - period, len(candles)):
+        current = candles[index]
+        previous = candles[index - 1]
+        current_typical = (current["high"] + current["low"] + current["close"]) / 3
+        previous_typical = (previous["high"] + previous["low"] + previous["close"]) / 3
+        money_flow = current_typical * current["volume"]
+        if current_typical > previous_typical:
+            positive += money_flow
+        elif current_typical < previous_typical:
+            negative += money_flow
+    if negative == 0:
+        return 100
+    ratio = positive / negative
+    return 100 - (100 / (1 + ratio))
+
+
+def donchian_series(candles, period=20):
+    upper = []
+    lower = []
+    for index in range(len(candles)):
+        if index < period - 1:
+            upper.append(None)
+            lower.append(None)
+            continue
+        window = candles[index - period + 1 : index + 1]
+        upper.append(max(item["high"] for item in window))
+        lower.append(min(item["low"] for item in window))
+    return upper, lower
+
+
+def keltner_series(candles, period=20, multiplier=2):
+    closes = [item["close"] for item in candles]
+    basis = ema_series(closes, period)
+    atr = atr_series(candles, period)
+    upper = [
+        mid + multiplier * range_value if mid is not None and range_value is not None else None
+        for mid, range_value in zip(basis, atr)
+    ]
+    lower = [
+        mid - multiplier * range_value if mid is not None and range_value is not None else None
+        for mid, range_value in zip(basis, atr)
+    ]
+    return basis, upper, lower
+
+
+def ichimoku_series(candles):
+    tenkan = []
+    kijun = []
+    span_b = []
+    for index in range(len(candles)):
+        if index >= 8:
+            window = candles[index - 8 : index + 1]
+            tenkan.append((max(item["high"] for item in window) + min(item["low"] for item in window)) / 2)
+        else:
+            tenkan.append(None)
+        if index >= 25:
+            window = candles[index - 25 : index + 1]
+            kijun.append((max(item["high"] for item in window) + min(item["low"] for item in window)) / 2)
+        else:
+            kijun.append(None)
+        if index >= 51:
+            window = candles[index - 51 : index + 1]
+            span_b.append((max(item["high"] for item in window) + min(item["low"] for item in window)) / 2)
+        else:
+            span_b.append(None)
+    span_a = [
+        (fast + slow) / 2 if fast is not None and slow is not None else None
+        for fast, slow in zip(tenkan, kijun)
+    ]
+    return tenkan, kijun, span_a, span_b
+
+
+def percent_distance(value, base):
+    if value is None or base in (None, 0):
+        return None
+    return ((value / base) - 1) * 100
+
+
 def calculate_indicators(candles):
     closes = [item["close"] for item in candles]
     volumes = [item["volume"] for item in candles]
@@ -288,6 +789,9 @@ def calculate_indicators(candles):
     ma50 = sma(closes, 50)
     ma100 = sma(closes, 100)
     ma200 = sma(closes, 200)
+    ema21 = last_valid(ema_series(closes, 21))
+    ema50 = last_valid(ema_series(closes, 50))
+    vwma20 = last_valid(rolling_vwma(closes, volumes, 20))
     basis = sma(closes, 20)
     std = None
     if len(closes) >= 20:
@@ -301,23 +805,103 @@ def calculate_indicators(candles):
     volume_change = ((volumes[-1] / volume_avg) - 1) * 100 if volume_avg else None
     last = closes[-1]
     distance_ma200 = ((last / ma200) - 1) * 100 if ma200 else None
+    atr14 = last_valid(atr_series(candles, 14))
+    atr_percent = (atr14 / last) * 100 if atr14 and last else None
+    donchian_upper, donchian_lower = donchian_series(candles, 20)
+    keltner_basis, keltner_upper, keltner_lower = keltner_series(candles, 20)
+    tenkan, kijun, span_a, span_b = ichimoku_series(candles)
+    obv_values = obv_series(candles)
+    previous_obv = obv_values[-6] if len(obv_values) > 6 else None
+    obv_change = percent_distance(obv_values[-1], previous_obv) if previous_obv else None
+    donchian_high = last_valid(donchian_upper)
+    donchian_low = last_valid(donchian_lower)
+    trend_score = 0
+    for reference in [ma50, ma100, ma200, ema21, ema50, last_valid(kijun)]:
+        if reference is not None:
+            trend_score += 1 if last >= reference else -1
+    if histogram is not None:
+        trend_score += 1 if histogram >= 0 else -1
 
     return {
         "last_close": last,
         "ma50": ma50,
         "ma100": ma100,
         "ma200": ma200,
+        "ema21": ema21,
+        "ema50": ema50,
+        "vwma20": vwma20,
         "distance_ma200": distance_ma200,
         "bb_upper": upper,
         "bb_basis": basis,
         "bb_lower": lower,
         "rsi14": rsi_value(closes),
+        "stoch_rsi14": stoch_rsi_value(closes),
+        "mfi14": mfi_value(candles),
+        "atr14": atr14,
+        "atr_percent": atr_percent,
+        "adx14": adx_value(candles),
         "macd": macd,
         "macd_signal": signal,
         "macd_histogram": histogram,
         "volume": volumes[-1],
         "volume_change": volume_change,
+        "obv": obv_values[-1] if obv_values else None,
+        "obv_change": obv_change,
+        "donchian_upper": donchian_high,
+        "donchian_lower": donchian_low,
+        "keltner_upper": last_valid(keltner_upper),
+        "keltner_basis": last_valid(keltner_basis),
+        "keltner_lower": last_valid(keltner_lower),
+        "ichimoku_tenkan": last_valid(tenkan),
+        "ichimoku_kijun": last_valid(kijun),
+        "ichimoku_span_a": last_valid(span_a),
+        "ichimoku_span_b": last_valid(span_b),
+        "trend_score": trend_score,
     }
+
+
+def classify_news(title, summary):
+    haystack = f"{title} {summary}".lower()
+    for category, keywords in NEWS_CATEGORIES:
+        if any(keyword in haystack for keyword in keywords):
+            return category
+    return "Mercado"
+
+
+def news_impact(title, summary):
+    haystack = f"{title} {summary}".lower()
+    score = 0
+    high_keywords = [
+        "etf",
+        "sec",
+        "fed",
+        "cpi",
+        "hack",
+        "ban",
+        "liquidation",
+        "liquidacao",
+        "crash",
+        "record",
+        "all-time high",
+        "ath",
+    ]
+    medium_keywords = [
+        "funding",
+        "open interest",
+        "miner",
+        "difficulty",
+        "mempool",
+        "lightning",
+        "regulation",
+        "regulacao",
+    ]
+    score += sum(2 for keyword in high_keywords if keyword in haystack)
+    score += sum(1 for keyword in medium_keywords if keyword in haystack)
+    if score >= 3:
+        return "alto"
+    if score >= 1:
+        return "medio"
+    return "normal"
 
 
 class BitcoinMonitorApp(Tk):
@@ -328,6 +912,7 @@ class BitcoinMonitorApp(Tk):
         self.minsize(1020, 680)
         self.configure(bg=COLORS["bg"])
 
+        self.store = LocalStore(DB_FILE)
         self.data_queue = queue.Queue()
         self.fetch_lock = threading.Lock()
         self.fetching = False
@@ -337,7 +922,12 @@ class BitcoinMonitorApp(Tk):
             "ma50": BooleanVar(value=True),
             "ma100": BooleanVar(value=True),
             "ma200": BooleanVar(value=True),
+            "ema21": BooleanVar(value=False),
+            "ema50": BooleanVar(value=False),
             "bollinger": BooleanVar(value=True),
+            "keltner": BooleanVar(value=False),
+            "donchian": BooleanVar(value=False),
+            "ichimoku": BooleanVar(value=False),
             "volume": BooleanVar(value=True),
         }
         self.update_status_var = StringVar(value=f"Versao atual: {APP_VERSION}")
@@ -355,9 +945,12 @@ class BitcoinMonitorApp(Tk):
         self.news_items = []
         self.news_links = {}
         self.indicator_chart_state = {}
+        self.derivatives_chart_state = {}
         self.alerts = self.load_alerts()
         self.value_vars = {}
         self.indicator_vars = {}
+        self.derivative_vars = {}
+        self.onchain_vars = {}
 
         self.setup_styles()
         self.build_ui()
@@ -461,10 +1054,14 @@ class BitcoinMonitorApp(Tk):
 
         dashboard_tab = Frame(self.notebook, bg=COLORS["bg"])
         indicators_tab = Frame(self.notebook, bg=COLORS["bg"])
+        derivatives_tab = Frame(self.notebook, bg=COLORS["bg"])
+        onchain_tab = Frame(self.notebook, bg=COLORS["bg"])
         news_tab = Frame(self.notebook, bg=COLORS["bg"])
         update_tab = Frame(self.notebook, bg=COLORS["bg"])
         self.notebook.add(dashboard_tab, text="Painel")
         self.notebook.add(indicators_tab, text="Indicadores")
+        self.notebook.add(derivatives_tab, text="Derivativos")
+        self.notebook.add(onchain_tab, text="Rede")
         self.notebook.add(news_tab, text="Noticias")
         self.notebook.add(update_tab, text="Atualizacao")
 
@@ -521,6 +1118,7 @@ class BitcoinMonitorApp(Tk):
             [
                 ("Volume 24h", "volume_24h"),
                 ("Market cap", "market_cap"),
+                ("Dominancia BTC", "btc_dominance"),
                 ("Spread", "spread"),
                 ("Ultima atualizacao", "last_update"),
             ]
@@ -543,6 +1141,8 @@ class BitcoinMonitorApp(Tk):
         for idx, (title, key) in enumerate(
             [
                 ("Fear & Greed", "fear_greed"),
+                ("Variacao 7D", "change_7d"),
+                ("Variacao 30D", "change_30d"),
                 ("Fee rapida", "fee_fastest"),
                 ("Altura do bloco", "block_height"),
                 ("Mempool", "mempool_vmb"),
@@ -612,6 +1212,8 @@ class BitcoinMonitorApp(Tk):
         self.build_alerts(lower).grid(row=0, column=2, sticky="nsew", padx=(0, 10))
         self.build_events(lower).grid(row=0, column=3, sticky="nsew")
         self.build_indicators_tab(indicators_tab)
+        self.build_derivatives_tab(derivatives_tab)
+        self.build_onchain_tab(onchain_tab)
         self.build_news_tab(news_tab)
         self.build_update_tab(update_tab)
 
@@ -832,15 +1434,26 @@ class BitcoinMonitorApp(Tk):
             fg=COLORS["muted"],
             font=("Segoe UI", 9, "bold"),
         ).pack(side=LEFT, padx=(0, 8))
-        for text, key in [
+        layers_grid = Frame(layers_bar, bg=COLORS["panel"])
+        layers_grid.pack(side=LEFT, fill=X, expand=True)
+        for idx, (text, key) in enumerate([
             ("MM50", "ma50"),
             ("MM100", "ma100"),
             ("MM200", "ma200"),
+            ("EMA21", "ema21"),
+            ("EMA50", "ema50"),
             ("Bollinger", "bollinger"),
+            ("Keltner", "keltner"),
+            ("Donchian", "donchian"),
+            ("Ichimoku", "ichimoku"),
             ("Volume", "volume"),
-        ]:
-            self.make_check(layers_bar, text, self.indicator_layers[key], self.draw_indicator_chart).pack(
-                side=LEFT, padx=(0, 10)
+        ]):
+            self.make_check(layers_grid, text, self.indicator_layers[key], self.draw_indicator_chart).grid(
+                row=idx // 5,
+                column=idx % 5,
+                sticky="w",
+                padx=(0, 10),
+                pady=(0, 3),
             )
         self.indicator_canvas = Canvas(
             chart_panel,
@@ -900,8 +1513,165 @@ class BitcoinMonitorApp(Tk):
                 pady=(0 if idx < 2 else 8, 0),
             )
 
-        self.indicator_signal_text = self.make_text(side_panel, height=9, font=("Segoe UI", 9))
+        self.indicator_extra_text = self.make_text(side_panel, height=7, font=("Consolas", 9))
+        self.indicator_extra_text.pack(fill=X, pady=(10, 0))
+
+        self.indicator_signal_text = self.make_text(side_panel, height=8, font=("Segoe UI", 9))
         self.indicator_signal_text.pack(fill=BOTH, expand=True, pady=(10, 0))
+
+    def build_derivatives_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Futuros, funding e opcoes",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Sentimento profissional de derivativos",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+
+        metrics_panel = self.panel(parent)
+        metrics_panel.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        metrics_grid = Frame(metrics_panel, bg=COLORS["panel"])
+        metrics_grid.pack(fill=X)
+        derivative_specs = [
+            ("Funding atual", "funding_rate"),
+            ("Funding anualizado", "funding_annualized"),
+            ("Proximo funding", "next_funding"),
+            ("Basis mark/index", "basis"),
+            ("Open interest", "open_interest_btc"),
+            ("OI nocional", "open_interest_usd"),
+            ("OI 7D", "open_interest_7d"),
+            ("Long/Short top", "long_short"),
+            ("Taker buy/sell", "taker_ratio"),
+            ("Opcoes OI", "options_oi"),
+            ("Put/Call OI", "put_call_ratio"),
+            ("IV media", "options_iv"),
+        ]
+        for idx, (title, key) in enumerate(derivative_specs):
+            metrics_grid.grid_columnconfigure(idx % 4, weight=1)
+            self.derivative_vars[key] = StringVar(value="--")
+            self.metric_card(metrics_grid, title, self.derivative_vars[key]).grid(
+                row=idx // 4,
+                column=idx % 4,
+                sticky="nsew",
+                padx=(0 if idx % 4 == 0 else 8, 0),
+                pady=(0 if idx < 4 else 8, 0),
+            )
+
+        lower = Frame(parent, bg=COLORS["bg"])
+        lower.grid(row=2, column=0, sticky="nsew")
+        lower.grid_columnconfigure(0, weight=2)
+        lower.grid_columnconfigure(1, weight=1)
+        lower.grid_rowconfigure(0, weight=1)
+
+        chart_panel = self.panel(lower)
+        chart_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        Label(
+            chart_panel,
+            text="Open interest e posicionamento 30D",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.derivatives_canvas = Canvas(
+            chart_panel,
+            height=360,
+            bg="#0f0e0b",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["line_soft"],
+        )
+        self.derivatives_canvas.pack(fill=BOTH, expand=True, pady=(12, 0))
+        self.derivatives_canvas.bind("<Configure>", lambda _event: self.draw_derivatives_chart())
+
+        signal_panel = self.panel(lower)
+        signal_panel.grid(row=0, column=1, sticky="nsew")
+        Label(
+            signal_panel,
+            text="Leitura",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.derivative_signal_text = self.make_text(signal_panel, height=18, font=("Segoe UI", 9))
+        self.derivative_signal_text.pack(fill=BOTH, expand=True, pady=(12, 0))
+
+    def build_onchain_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Mempool, fees e seguranca da rede",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Estado operacional do Bitcoin",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+
+        metrics_panel = self.panel(parent)
+        metrics_panel.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        grid = Frame(metrics_panel, bg=COLORS["panel"])
+        grid.pack(fill=X)
+        onchain_specs = [
+            ("Altura do bloco", "height"),
+            ("Mempool", "mempool_vmb"),
+            ("Transacoes", "mempool_count"),
+            ("Fee rapida", "fee_fastest"),
+            ("Fee 1h", "fee_hour"),
+            ("Fee economica", "fee_economy"),
+            ("Ajuste dificuldade", "difficulty_change"),
+            ("Retarget em", "retarget_eta"),
+            ("Blocos restantes", "remaining_blocks"),
+            ("Bloco projetado 1", "projected_block_1"),
+            ("Bloco projetado 2", "projected_block_2"),
+            ("Bloco projetado 3", "projected_block_3"),
+        ]
+        for idx, (title, key) in enumerate(onchain_specs):
+            grid.grid_columnconfigure(idx % 4, weight=1)
+            self.onchain_vars[key] = StringVar(value="--")
+            self.metric_card(grid, title, self.onchain_vars[key]).grid(
+                row=idx // 4,
+                column=idx % 4,
+                sticky="nsew",
+                padx=(0 if idx % 4 == 0 else 8, 0),
+                pady=(0 if idx < 4 else 8, 0),
+            )
+
+        detail_panel = self.panel(parent)
+        detail_panel.grid(row=2, column=0, sticky="nsew")
+        Label(
+            detail_panel,
+            text="Blocos projetados e diagnostico",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.onchain_text = self.make_text(detail_panel, height=22, font=("Consolas", 10))
+        self.onchain_text.pack(fill=BOTH, expand=True, pady=(12, 0))
 
     def build_news_tab(self, parent):
         parent.grid_rowconfigure(1, weight=1)
@@ -943,6 +1713,8 @@ class BitcoinMonitorApp(Tk):
         self.news_text.tag_config("date", foreground=COLORS["dim"], font=("Segoe UI", 9))
         self.news_text.tag_config("headline", foreground=COLORS["text"], font=("Segoe UI", 12, "bold"))
         self.news_text.tag_config("summary", foreground=COLORS["muted"], font=("Segoe UI", 9))
+        self.news_text.tag_config("category", foreground="#ffd166", font=("Segoe UI", 9, "bold"))
+        self.news_text.tag_config("impact", foreground=COLORS["red"], font=("Segoe UI", 9, "bold"))
         self.news_text.tag_config("link", foreground=COLORS["orange"], underline=True)
         self.news_text.pack(fill=BOTH, expand=True)
 
@@ -1047,25 +1819,56 @@ class BitcoinMonitorApp(Tk):
         thread = threading.Thread(target=self.fetch_news_worker, daemon=True)
         thread.start()
 
+    def fetch_with_cache(self, cache_key, function, url, timeout=10, ttl=60):
+        cached = self.store.get_cache(cache_key, ttl)
+        if cached is not None:
+            return cached
+        try:
+            payload = function(url, timeout)
+            self.store.set_cache(cache_key, payload)
+            return payload
+        except Exception:
+            stale = self.store.get_cache(cache_key, None)
+            if stale is not None:
+                return stale
+            raise
+
     def fetch_worker(self, interval):
         data = {"_kind": "market", "errors": []}
         jobs = {
             "coingecko": (fetch_json, ENDPOINTS["coingecko"]),
+            "coingecko_markets": (fetch_json, ENDPOINTS["coingecko_markets"]),
+            "coingecko_global": (fetch_json, ENDPOINTS["coingecko_global"]),
             "binance_ticker": (fetch_json, ENDPOINTS["binance_ticker"]),
             "candles": (fetch_json, ENDPOINTS["candles"].format(interval=interval)),
             "weekly_candles": (fetch_json, ENDPOINTS["weekly_candles"]),
             "monthly_candles": (fetch_json, ENDPOINTS["monthly_candles"]),
             "depth": (fetch_json, ENDPOINTS["depth"]),
             "fees": (fetch_json, ENDPOINTS["fees"]),
+            "mempool_blocks": (fetch_json, ENDPOINTS["mempool_blocks"]),
             "mempool": (fetch_json, ENDPOINTS["mempool"]),
             "tip_height": (fetch_text, ENDPOINTS["tip_height"]),
             "difficulty": (fetch_json, ENDPOINTS["difficulty"]),
             "fear_greed": (fetch_json, ENDPOINTS["fear_greed"]),
+            "futures_open_interest": (fetch_json, ENDPOINTS["futures_open_interest"]),
+            "futures_funding": (fetch_json, ENDPOINTS["futures_funding"]),
+            "futures_premium": (fetch_json, ENDPOINTS["futures_premium"]),
+            "futures_open_interest_hist": (fetch_json, ENDPOINTS["futures_open_interest_hist"]),
+            "futures_long_short": (fetch_json, ENDPOINTS["futures_long_short"]),
+            "futures_taker_ratio": (fetch_json, ENDPOINTS["futures_taker_ratio"]),
+            "deribit_options": (fetch_json, ENDPOINTS["deribit_options"]),
         }
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             futures = {
-                executor.submit(function, url): name
+                executor.submit(
+                    self.fetch_with_cache,
+                    f"{name}:{interval}" if name == "candles" else name,
+                    function,
+                    url,
+                    12,
+                    CACHE_TTLS.get(name, 60),
+                ): name
                 for name, (function, url) in jobs.items()
             }
             for future in concurrent.futures.as_completed(futures):
@@ -1103,15 +1906,24 @@ class BitcoinMonitorApp(Tk):
             key=lambda item: item.get("published") or dt.datetime.min.replace(tzinfo=dt.timezone.utc),
             reverse=True,
         )
+        if sorted_items:
+            self.store.save_news(sorted_items[:80])
+        elif errors:
+            sorted_items = self.store.load_news(40)
         self.data_queue.put({"_kind": "news", "items": sorted_items[:40], "errors": errors})
 
     def parse_news_feed(self, source, feed_text):
         root = ET.fromstring(feed_text)
         items = []
-        for item in root.findall(".//item"):
+        candidates = root.findall(".//item") + root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        for item in candidates:
             title = self.xml_text(item, "title")
-            link = self.xml_text(item, "link") or self.xml_text(item, "guid")
-            description = self.clean_html(self.xml_text(item, "description"))
+            link = self.xml_link(item)
+            description = self.clean_html(
+                self.xml_text(item, "description")
+                or self.xml_text(item, "summary")
+                or self.xml_text(item, "content")
+            )
             published = self.parse_date(
                 self.xml_text(item, "pubDate")
                 or self.xml_text(item, "published")
@@ -1121,6 +1933,7 @@ class BitcoinMonitorApp(Tk):
             haystack = f"{title} {description}".lower()
             if "bitcoin" not in haystack and "btc" not in haystack:
                 continue
+            category = classify_news(title, description)
             items.append(
                 {
                     "source": source,
@@ -1128,6 +1941,8 @@ class BitcoinMonitorApp(Tk):
                     "link": link.strip(),
                     "summary": description[:260],
                     "published": published,
+                    "category": category,
+                    "impact": news_impact(title, description),
                 }
             )
         return items
@@ -1156,6 +1971,8 @@ class BitcoinMonitorApp(Tk):
         self.apply_indicator_candles(payload.get("weekly_candles"), payload.get("monthly_candles"))
         self.apply_depth(payload.get("depth"))
         self.apply_network(payload)
+        self.apply_onchain(payload)
+        self.apply_derivatives(payload)
         self.apply_fear_greed(payload.get("fear_greed"))
 
         if not errors:
@@ -1168,6 +1985,7 @@ class BitcoinMonitorApp(Tk):
             self.add_event("Dados", "Nao foi possivel atualizar as fontes publicas agora.")
 
         self.value_vars["last_update"].set(time.strftime("%H:%M:%S"))
+        self.store.save_market_snapshot(self.metrics)
         self.check_alerts()
 
     def apply_news(self, payload):
@@ -1206,6 +2024,10 @@ class BitcoinMonitorApp(Tk):
             self.news_text.insert(END, f"{item['source']}  ", "source")
             self.news_text.insert(END, f"{date_label}\n", "date")
             self.news_text.insert(END, f"{item['title']}\n", "headline")
+            meta = f"{item.get('category', 'Mercado')} | impacto {item.get('impact', 'normal')}"
+            if item.get("cached"):
+                meta += " | cache local"
+            self.news_text.insert(END, f"{meta}\n", "impact" if item.get("impact") == "alto" else "category")
             if item.get("summary"):
                 self.news_text.insert(END, f"{item['summary']}\n", "summary")
             tag = f"news_link_{index}"
@@ -1332,6 +2154,9 @@ del "%~f0" > nul 2> nul
 
     def apply_market(self, payload):
         coingecko = payload.get("coingecko", {}).get("bitcoin", {})
+        market_rows = payload.get("coingecko_markets") or []
+        market = market_rows[0] if market_rows else {}
+        global_data = (payload.get("coingecko_global") or {}).get("data") or {}
         ticker = payload.get("binance_ticker", {})
 
         price_usd = self.to_float(coingecko.get("usd")) or self.to_float(ticker.get("lastPrice"))
@@ -1341,12 +2166,22 @@ del "%~f0" > nul 2> nul
         )
         volume = self.to_float(coingecko.get("usd_24h_vol")) or self.to_float(ticker.get("quoteVolume"))
         market_cap = self.to_float(coingecko.get("usd_market_cap"))
+        change_1h = self.to_float(market.get("price_change_percentage_1h_in_currency"))
+        change_7d = self.to_float(market.get("price_change_percentage_7d_in_currency"))
+        change_30d = self.to_float(market.get("price_change_percentage_30d_in_currency"))
+        ath_change = self.to_float(market.get("ath_change_percentage"))
+        dominance = self.to_float((global_data.get("market_cap_percentage") or {}).get("btc"))
 
         self.metrics.update(
             {
                 "price_usd": price_usd,
                 "price_brl": price_brl,
                 "change_24h": change,
+                "change_1h": change_1h,
+                "change_7d": change_7d,
+                "change_30d": change_30d,
+                "ath_change": ath_change,
+                "btc_dominance": dominance,
             }
         )
 
@@ -1358,6 +2193,9 @@ del "%~f0" > nul 2> nul
         )
         self.value_vars["volume_24h"].set(format_compact_currency(volume, "USD"))
         self.value_vars["market_cap"].set(format_compact_currency(market_cap, "USD"))
+        self.value_vars["btc_dominance"].set(f"{format_number(dominance, 1)}%")
+        self.value_vars["change_7d"].set(format_percent(change_7d))
+        self.value_vars["change_30d"].set(format_percent(change_30d))
 
     def apply_candles(self, rows):
         if not rows:
@@ -1415,12 +2253,14 @@ del "%~f0" > nul 2> nul
             self.value_vars["fee_hour"].set(f"{format_number(hour, 0)} sat/vB")
 
         if mempool:
-            vmb = self.to_float(mempool.get("vsize")) / 1_000_000
+            vsize = self.to_float(mempool.get("vsize"))
+            vmb = vsize / 1_000_000 if vsize is not None else None
             count = self.to_float(mempool.get("count"))
             self.metrics["mempool_vmb"] = vmb
             self.value_vars["mempool_vmb"].set(f"{format_number(vmb, 1)} vMB")
             self.value_vars["mempool_count"].set(format_number(count, 0))
-            self.draw_mempool_bar(vmb)
+            if vmb is not None:
+                self.draw_mempool_bar(vmb)
 
         if tip_height:
             self.value_vars["block_height"].set(f"{int(tip_height):,}".replace(",", "."))
@@ -1428,6 +2268,313 @@ del "%~f0" > nul 2> nul
         if difficulty:
             change = self.to_float(difficulty.get("difficultyChange"))
             self.value_vars["difficulty_change"].set(format_percent(change))
+
+    def apply_onchain(self, payload):
+        if not self.onchain_vars:
+            return
+
+        fees = payload.get("fees") or {}
+        mempool = payload.get("mempool") or {}
+        difficulty = payload.get("difficulty") or {}
+        blocks = payload.get("mempool_blocks") or []
+        tip_height = payload.get("tip_height")
+
+        fastest = self.to_float(fees.get("fastestFee"))
+        hour = self.to_float(fees.get("hourFee"))
+        economy = self.to_float(fees.get("economyFee"))
+        vmb = self.to_float(mempool.get("vsize"))
+        count = self.to_float(mempool.get("count"))
+        vmb = vmb / 1_000_000 if vmb is not None else None
+        change = self.to_float(difficulty.get("difficultyChange"))
+
+        if tip_height:
+            self.onchain_vars["height"].set(f"{int(tip_height):,}".replace(",", "."))
+        self.onchain_vars["mempool_vmb"].set(f"{format_number(vmb, 1)} vMB")
+        self.onchain_vars["mempool_count"].set(format_number(count, 0))
+        self.onchain_vars["fee_fastest"].set(f"{format_number(fastest, 0)} sat/vB")
+        self.onchain_vars["fee_hour"].set(f"{format_number(hour, 0)} sat/vB")
+        self.onchain_vars["fee_economy"].set(f"{format_number(economy, 0)} sat/vB")
+        self.onchain_vars["difficulty_change"].set(format_percent(change))
+        self.onchain_vars["retarget_eta"].set(format_duration_ms(difficulty.get("remainingTime")))
+        self.onchain_vars["remaining_blocks"].set(format_number(self.to_float(difficulty.get("remainingBlocks")), 0))
+
+        for index in range(3):
+            key = f"projected_block_{index + 1}"
+            if index < len(blocks):
+                block = blocks[index]
+                median = self.to_float(block.get("medianFee"))
+                txs = self.to_float(block.get("nTx"))
+                self.onchain_vars[key].set(f"{format_number(median, 1)} sat/vB | {format_number(txs, 0)} tx")
+            else:
+                self.onchain_vars[key].set("--")
+
+        lines = [
+            "Bloco  Mediana sat/vB  Tx        Fees BTC    Faixa sat/vB",
+            "-----  -------------  --------  ----------  ----------------",
+        ]
+        for index, block in enumerate(blocks[:8], start=1):
+            median = self.to_float(block.get("medianFee"))
+            txs = self.to_float(block.get("nTx"))
+            total_fees = self.to_float(block.get("totalFees"))
+            fee_btc = total_fees / 100_000_000 if total_fees is not None else None
+            fee_range = block.get("feeRange") or []
+            low = self.to_float(fee_range[0]) if fee_range else None
+            high = self.to_float(fee_range[-1]) if fee_range else None
+            lines.append(
+                f"{index:>5}  {format_number(median, 2):>13}  "
+                f"{format_number(txs, 0):>8}  {format_number(fee_btc, 4):>10}  "
+                f"{format_number(low, 1)} - {format_number(high, 1)}"
+            )
+        lines.append("")
+        lines.append(f"Retarget estimado: {format_timestamp_ms(difficulty.get('estimatedRetargetDate'))}")
+        lines.append(f"Progresso do periodo: {format_percent(self.to_float(difficulty.get('progressPercent')))}")
+        lines.append(f"Tempo medio ajustado: {format_duration_ms(self.to_float(difficulty.get('adjustedTimeAvg')))}")
+        self.write_text_widget(self.onchain_text, lines)
+
+    def apply_derivatives(self, payload):
+        if not self.derivative_vars:
+            return
+
+        premium = payload.get("futures_premium") or {}
+        open_interest = payload.get("futures_open_interest") or {}
+        funding_rows = payload.get("futures_funding") or []
+        oi_hist = payload.get("futures_open_interest_hist") or []
+        long_short_rows = payload.get("futures_long_short") or []
+        taker_rows = payload.get("futures_taker_ratio") or []
+        options = (payload.get("deribit_options") or {}).get("result") or []
+
+        latest_funding = funding_rows[-1] if funding_rows else {}
+        funding_rate = self.to_float(premium.get("lastFundingRate"))
+        if funding_rate is None:
+            funding_rate = self.to_float(latest_funding.get("fundingRate"))
+        funding_pct = funding_rate * 100 if funding_rate is not None else None
+        annualized = funding_rate * 3 * 365 * 100 if funding_rate is not None else None
+        mark = self.to_float(premium.get("markPrice"))
+        index_price = self.to_float(premium.get("indexPrice"))
+        basis_pct = percent_distance(mark, index_price) if mark and index_price else None
+        oi_btc = self.to_float(open_interest.get("openInterest"))
+        oi_usd = oi_btc * mark if oi_btc is not None and mark else None
+
+        oi_values = [self.to_float(row.get("sumOpenInterestValue")) for row in oi_hist]
+        oi_values = [item for item in oi_values if item is not None]
+        oi_7d = percent_distance(oi_values[-1], oi_values[-8]) if len(oi_values) >= 8 else None
+        oi_30d = percent_distance(oi_values[-1], oi_values[0]) if len(oi_values) >= 2 else None
+
+        long_short = self.to_float(long_short_rows[-1].get("longShortRatio")) if long_short_rows else None
+        taker = self.to_float(taker_rows[-1].get("buySellRatio")) if taker_rows else None
+
+        call_oi = 0
+        put_oi = 0
+        iv_weighted = 0
+        iv_weight = 0
+        strike_oi = {}
+        for option in options:
+            name = option.get("instrument_name") or ""
+            oi = self.to_float(option.get("open_interest")) or 0
+            iv = self.to_float(option.get("mark_iv"))
+            parts = name.split("-")
+            strike = parts[2] if len(parts) >= 4 else ""
+            if name.endswith("-C"):
+                call_oi += oi
+            elif name.endswith("-P"):
+                put_oi += oi
+            if strike:
+                strike_oi[strike] = strike_oi.get(strike, 0) + oi
+            if iv is not None and oi:
+                iv_weighted += iv * oi
+                iv_weight += oi
+        options_oi = call_oi + put_oi
+        put_call = put_oi / call_oi if call_oi else None
+        average_iv = iv_weighted / iv_weight if iv_weight else None
+        largest_strike = max(strike_oi.items(), key=lambda item: item[1])[0] if strike_oi else "--"
+
+        self.metrics.update(
+            {
+                "funding_rate_pct": funding_pct,
+                "open_interest_usd": oi_usd,
+                "long_short_ratio": long_short,
+            }
+        )
+
+        self.derivative_vars["funding_rate"].set(format_percent(funding_pct))
+        self.derivative_vars["funding_annualized"].set(format_percent(annualized))
+        self.derivative_vars["next_funding"].set(format_timestamp_ms(premium.get("nextFundingTime")))
+        self.derivative_vars["basis"].set(format_percent(basis_pct))
+        self.derivative_vars["open_interest_btc"].set(format_btc(oi_btc))
+        self.derivative_vars["open_interest_usd"].set(format_compact_currency(oi_usd, "USD"))
+        self.derivative_vars["open_interest_7d"].set(f"{format_percent(oi_7d)} / 30D {format_percent(oi_30d)}")
+        self.derivative_vars["long_short"].set(format_number(long_short, 2))
+        self.derivative_vars["taker_ratio"].set(format_number(taker, 2))
+        self.derivative_vars["options_oi"].set(format_btc(options_oi))
+        self.derivative_vars["put_call_ratio"].set(format_number(put_call, 2))
+        self.derivative_vars["options_iv"].set(format_percent(average_iv))
+
+        lines = self.build_derivative_signals(
+            funding_pct,
+            annualized,
+            basis_pct,
+            oi_7d,
+            oi_30d,
+            long_short,
+            taker,
+            put_call,
+            average_iv,
+            largest_strike,
+        )
+        self.write_text_widget(self.derivative_signal_text, lines, prefix="- ")
+        self.derivatives_chart_state = {
+            "oi_hist": oi_hist,
+            "long_short": long_short_rows,
+            "taker": taker_rows,
+        }
+        self.draw_derivatives_chart()
+
+    def build_derivative_signals(
+        self,
+        funding_pct,
+        annualized,
+        basis_pct,
+        oi_7d,
+        oi_30d,
+        long_short,
+        taker,
+        put_call,
+        average_iv,
+        largest_strike,
+    ):
+        lines = ["Dados publicos: Binance USDS-M Futures e Deribit options."]
+        if funding_pct is not None:
+            if funding_pct > 0.05:
+                lines.append("Funding elevado: longs pagando caro para manter exposicao.")
+            elif funding_pct < -0.01:
+                lines.append("Funding negativo: shorts pagando, possivel estresse baixista.")
+            else:
+                lines.append("Funding perto do neutro.")
+        if annualized is not None:
+            lines.append(f"Funding anualizado aproximado: {format_percent(annualized)}.")
+        if basis_pct is not None:
+            if abs(basis_pct) > 0.15:
+                lines.append(f"Basis mark/index relevante: {format_percent(basis_pct)}.")
+            else:
+                lines.append("Mark price proximo do indice spot.")
+        if oi_7d is not None:
+            direction = "subiu" if oi_7d >= 0 else "caiu"
+            lines.append(f"Open interest {direction} {format_percent(abs(oi_7d))} em 7 dias.")
+        if oi_30d is not None:
+            direction = "expansao" if oi_30d >= 0 else "contracao"
+            lines.append(f"OI 30D em {direction}: {format_percent(oi_30d)}.")
+        if long_short is not None:
+            if long_short > 1.25:
+                lines.append("Top traders inclinados para long.")
+            elif long_short < 0.85:
+                lines.append("Top traders inclinados para short.")
+            else:
+                lines.append("Long/short dos top traders equilibrado.")
+        if taker is not None:
+            if taker > 1.08:
+                lines.append("Fluxo taker comprador acima do vendedor.")
+            elif taker < 0.92:
+                lines.append("Fluxo taker vendedor acima do comprador.")
+            else:
+                lines.append("Fluxo taker perto do equilibrio.")
+        if put_call is not None:
+            if put_call > 1.1:
+                lines.append("Opcoes com put/call alto: hedge ou vies defensivo mais forte.")
+            elif put_call < 0.7:
+                lines.append("Opcoes com maior concentracao relativa em calls.")
+            else:
+                lines.append("Put/call de opcoes em zona intermediaria.")
+        if average_iv is not None:
+            lines.append(f"IV media ponderada de opcoes: {format_percent(average_iv)}.")
+        if largest_strike and largest_strike != "--":
+            lines.append(f"Maior concentracao bruta de OI por strike: {largest_strike}.")
+        return lines
+
+    def draw_derivatives_chart(self):
+        canvas = getattr(self, "derivatives_canvas", None)
+        if not canvas:
+            return
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 20 or height <= 20:
+            return
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, width, height, fill="#0f0e0b", outline="")
+
+        state = self.derivatives_chart_state
+        oi_rows = state.get("oi_hist") or []
+        long_rows = state.get("long_short") or []
+        if not oi_rows:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="Aguardando derivativos...",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 12, "bold"),
+            )
+            return
+
+        oi_values = [self.to_float(row.get("sumOpenInterestValue")) for row in oi_rows]
+        oi_values = [value for value in oi_values if value is not None]
+        ratios = [self.to_float(row.get("longShortRatio")) for row in long_rows]
+        ratios = [value for value in ratios if value is not None]
+        if not oi_values:
+            return
+
+        left, right, top, bottom = 72, 48, 22, 42
+        plot_w = width - left - right
+        plot_h = height - top - bottom
+        min_oi = min(oi_values)
+        max_oi = max(oi_values)
+        span_oi = max(max_oi - min_oi, 1)
+        step = plot_w / max(len(oi_values) - 1, 1)
+
+        for idx in range(5):
+            y = top + (plot_h / 4) * idx
+            canvas.create_line(left, y, width - right, y, fill="#27231b")
+            value = max_oi - (span_oi / 4) * idx
+            canvas.create_text(
+                8,
+                y,
+                text=format_compact_currency(value, "USD"),
+                fill=COLORS["dim"],
+                anchor="w",
+                font=("Segoe UI", 8),
+            )
+
+        points = []
+        for idx, value in enumerate(oi_values):
+            x = left + idx * step
+            y = top + (max_oi - value) / span_oi * plot_h
+            points.extend([x, y])
+        if len(points) >= 4:
+            canvas.create_line(points, fill=COLORS["orange"], width=2)
+            canvas.create_text(points[-2], points[-1] - 12, text="OI USD", fill=COLORS["orange"], font=("Segoe UI", 8))
+
+        if ratios:
+            min_ratio = min(min(ratios), 0.75)
+            max_ratio = max(max(ratios), 1.35)
+            span_ratio = max(max_ratio - min_ratio, 0.1)
+            ratio_step = plot_w / max(len(ratios) - 1, 1)
+            ratio_points = []
+            for idx, value in enumerate(ratios):
+                x = left + idx * ratio_step
+                y = top + (max_ratio - value) / span_ratio * plot_h
+                ratio_points.extend([x, y])
+            if len(ratio_points) >= 4:
+                canvas.create_line(ratio_points, fill=COLORS["cyan"], width=2)
+                canvas.create_text(
+                    width - right,
+                    top + 8,
+                    text="Long/Short",
+                    fill=COLORS["cyan"],
+                    anchor="e",
+                    font=("Segoe UI", 8),
+                )
+            neutral_y = top + (max_ratio - 1) / span_ratio * plot_h
+            canvas.create_line(left, neutral_y, width - right, neutral_y, fill="#3b372d", dash=(4, 4))
+
+        canvas.create_text(left, height - 18, text="30 dias", fill=COLORS["muted"], anchor="w")
 
     def apply_fear_greed(self, payload):
         if not payload:
@@ -1556,6 +2703,8 @@ del "%~f0" > nul 2> nul
         if not snapshot:
             for variable in self.indicator_vars.values():
                 variable.set("--")
+            if hasattr(self, "indicator_extra_text"):
+                self.write_text_widget(self.indicator_extra_text, ["Aguardando indicadores avancados."])
             self.write_indicator_signals(["Aguardando candles semanais e mensais."])
             self.draw_indicator_chart()
             return
@@ -1575,8 +2724,25 @@ del "%~f0" > nul 2> nul
         self.indicator_vars["volume"].set(format_number(snapshot.get("volume"), 0))
         self.indicator_vars["volume_change"].set(format_percent(snapshot.get("volume_change")))
 
+        self.write_indicator_extras(snapshot)
         self.write_indicator_signals(self.build_indicator_signals(snapshot, period))
         self.draw_indicator_chart()
+
+    def write_indicator_extras(self, snapshot):
+        lines = [
+            f"EMA21       {format_currency(snapshot.get('ema21'), 'USD')}",
+            f"EMA50       {format_currency(snapshot.get('ema50'), 'USD')}",
+            f"VWMA20      {format_currency(snapshot.get('vwma20'), 'USD')}",
+            f"ATR14       {format_currency(snapshot.get('atr14'), 'USD')} ({format_percent(snapshot.get('atr_percent'))})",
+            f"ADX14       {format_number(snapshot.get('adx14'), 1)}",
+            f"Stoch RSI   {format_number(snapshot.get('stoch_rsi14'), 1)}",
+            f"MFI14       {format_number(snapshot.get('mfi14'), 1)}",
+            f"OBV         {format_compact_number(snapshot.get('obv'), 2)}",
+            f"Donchian    {format_currency(snapshot.get('donchian_lower'), 'USD')} - {format_currency(snapshot.get('donchian_upper'), 'USD')}",
+            f"Keltner     {format_currency(snapshot.get('keltner_lower'), 'USD')} - {format_currency(snapshot.get('keltner_upper'), 'USD')}",
+            f"Ichimoku    Tenkan {format_currency(snapshot.get('ichimoku_tenkan'), 'USD')} | Kijun {format_currency(snapshot.get('ichimoku_kijun'), 'USD')}",
+        ]
+        self.write_text_widget(self.indicator_extra_text, lines)
 
     def build_indicator_signals(self, snapshot, period):
         close = snapshot.get("last_close")
@@ -1621,6 +2787,59 @@ del "%~f0" > nul 2> nul
             direction = "positivo" if histogram >= 0 else "negativo"
             lines.append(f"Histograma MACD {direction}.")
 
+        adx = snapshot.get("adx14")
+        if adx is not None:
+            if adx >= 25:
+                lines.append("ADX 14 indica tendencia com forca acima da media.")
+            elif adx < 18:
+                lines.append("ADX 14 sugere mercado mais lateral.")
+
+        stoch_rsi = snapshot.get("stoch_rsi14")
+        if stoch_rsi is not None:
+            if stoch_rsi >= 80:
+                lines.append("Stoch RSI em regiao quente; cuidado com entradas atrasadas.")
+            elif stoch_rsi <= 20:
+                lines.append("Stoch RSI frio; possivel exaustao de venda no curto prazo do periodo.")
+
+        mfi = snapshot.get("mfi14")
+        if mfi is not None:
+            if mfi >= 80:
+                lines.append("MFI 14 mostra pressao de compra/volume elevada.")
+            elif mfi <= 20:
+                lines.append("MFI 14 mostra pressao de venda/volume elevada.")
+
+        atr_percent = snapshot.get("atr_percent")
+        if atr_percent is not None:
+            if atr_percent >= 8:
+                lines.append("ATR percentual alto: volatilidade estrutural elevada.")
+            elif atr_percent <= 3:
+                lines.append("ATR percentual baixo: volatilidade comprimida.")
+
+        donchian_upper = snapshot.get("donchian_upper")
+        donchian_lower = snapshot.get("donchian_lower")
+        if close and donchian_upper and donchian_lower:
+            if close >= donchian_upper * 0.995:
+                lines.append("Preco proximo da maxima Donchian 20: zona de rompimento.")
+            elif close <= donchian_lower * 1.005:
+                lines.append("Preco proximo da minima Donchian 20: zona de suporte/risco.")
+
+        keltner_upper = snapshot.get("keltner_upper")
+        keltner_lower = snapshot.get("keltner_lower")
+        if close and keltner_upper and keltner_lower:
+            if close > keltner_upper:
+                lines.append("Preco acima do canal de Keltner.")
+            elif close < keltner_lower:
+                lines.append("Preco abaixo do canal de Keltner.")
+
+        trend_score = snapshot.get("trend_score")
+        if trend_score is not None:
+            if trend_score >= 4:
+                lines.append("Score de tendencia majoritariamente altista.")
+            elif trend_score <= -4:
+                lines.append("Score de tendencia majoritariamente baixista.")
+            else:
+                lines.append("Score de tendencia misto.")
+
         volume_change = snapshot.get("volume_change")
         if volume_change is not None:
             if volume_change > 30:
@@ -1637,6 +2856,15 @@ del "%~f0" > nul 2> nul
         for line in lines:
             self.indicator_signal_text.insert(END, f"- {line}\n")
         self.indicator_signal_text.configure(state="disabled")
+
+    def write_text_widget(self, widget, lines, prefix=""):
+        if not widget:
+            return
+        widget.configure(state="normal")
+        widget.delete("1.0", END)
+        for line in lines:
+            widget.insert(END, f"{prefix}{line}\n")
+        widget.configure(state="disabled")
 
     def draw_indicator_chart(self):
         canvas = getattr(self, "indicator_canvas", None)
@@ -1667,6 +2895,8 @@ del "%~f0" > nul 2> nul
         ma50 = rolling_sma(closes, 50)
         ma100 = rolling_sma(closes, 100)
         ma200 = rolling_sma(closes, 200)
+        ema21 = ema_series(closes, 21)
+        ema50 = ema_series(closes, 50)
         bb_basis = rolling_sma(closes, 20)
         bb_std = rolling_std(closes, 20)
         bb_upper = [
@@ -1677,6 +2907,9 @@ del "%~f0" > nul 2> nul
             basis - 2 * std if basis is not None and std is not None else None
             for basis, std in zip(bb_basis, bb_std)
         ]
+        keltner_basis, keltner_upper, keltner_lower = keltner_series(candles, 20)
+        donchian_upper, donchian_lower = donchian_series(candles, 20)
+        tenkan, kijun, span_a, span_b = ichimoku_series(candles)
 
         show_volume = self.indicator_layers["volume"].get()
         left, right, top = 58, 18, 18
@@ -1684,8 +2917,17 @@ del "%~f0" > nul 2> nul
         volume_top = height - 62 if show_volume else height - bottom
         plot_h = volume_top - top - 12
         plot_w = width - left - right
-        max_price = max(highs + [item for item in bb_upper if item is not None])
-        min_price = min(lows + [item for item in bb_lower if item is not None])
+        price_refs = highs + lows
+        if self.indicator_layers["bollinger"].get():
+            price_refs.extend(item for item in bb_upper + bb_lower if item is not None)
+        if self.indicator_layers["keltner"].get():
+            price_refs.extend(item for item in keltner_upper + keltner_lower if item is not None)
+        if self.indicator_layers["donchian"].get():
+            price_refs.extend(item for item in donchian_upper + donchian_lower if item is not None)
+        if self.indicator_layers["ichimoku"].get():
+            price_refs.extend(item for item in tenkan + kijun + span_a + span_b if item is not None)
+        max_price = max(price_refs)
+        min_price = min(price_refs)
         span = max(max_price - min_price, 1)
 
         def to_y(price):
@@ -1729,9 +2971,24 @@ del "%~f0" > nul 2> nul
             self.draw_series_line(canvas, ma100, left, step, to_y, COLORS["cyan"], "MM100")
         if self.indicator_layers["ma200"].get():
             self.draw_series_line(canvas, ma200, left, step, to_y, "#c084fc", "MM200")
+        if self.indicator_layers["ema21"].get():
+            self.draw_series_line(canvas, ema21, left, step, to_y, "#4ade80", "EMA21")
+        if self.indicator_layers["ema50"].get():
+            self.draw_series_line(canvas, ema50, left, step, to_y, "#60a5fa", "EMA50")
         if self.indicator_layers["bollinger"].get():
             self.draw_series_line(canvas, bb_upper, left, step, to_y, "#ff9188", "BB sup")
             self.draw_series_line(canvas, bb_lower, left, step, to_y, "#ff9188", "BB inf")
+        if self.indicator_layers["keltner"].get():
+            self.draw_series_line(canvas, keltner_upper, left, step, to_y, "#fbbf24", "Kelt sup")
+            self.draw_series_line(canvas, keltner_lower, left, step, to_y, "#fbbf24", "Kelt inf")
+        if self.indicator_layers["donchian"].get():
+            self.draw_series_line(canvas, donchian_upper, left, step, to_y, "#a3e635", "Don sup")
+            self.draw_series_line(canvas, donchian_lower, left, step, to_y, "#a3e635", "Don inf")
+        if self.indicator_layers["ichimoku"].get():
+            self.draw_series_line(canvas, tenkan, left, step, to_y, "#fb7185", "Tenkan")
+            self.draw_series_line(canvas, kijun, left, step, to_y, "#818cf8", "Kijun")
+            self.draw_series_line(canvas, span_a, left, step, to_y, "#34d399", "Span A")
+            self.draw_series_line(canvas, span_b, left, step, to_y, "#f87171", "Span B")
 
         if show_volume:
             max_volume = max(volumes) or 1
@@ -1760,9 +3017,17 @@ del "%~f0" > nul 2> nul
             "ma50": ma50,
             "ma100": ma100,
             "ma200": ma200,
+            "ema21": ema21,
+            "ema50": ema50,
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
             "bb_basis": bb_basis,
+            "keltner_upper": keltner_upper,
+            "keltner_lower": keltner_lower,
+            "donchian_upper": donchian_upper,
+            "donchian_lower": donchian_lower,
+            "tenkan": tenkan,
+            "kijun": kijun,
         }
 
     def draw_series_line(self, canvas, values, left, step, to_y, color, label):
@@ -1803,8 +3068,16 @@ del "%~f0" > nul 2> nul
             ("MM50", "ma50"),
             ("MM100", "ma100"),
             ("MM200", "ma200"),
+            ("EMA21", "ema21"),
+            ("EMA50", "ema50"),
             ("BB sup", "bb_upper"),
             ("BB inf", "bb_lower"),
+            ("Kelt sup", "keltner_upper"),
+            ("Kelt inf", "keltner_lower"),
+            ("Don sup", "donchian_upper"),
+            ("Don inf", "donchian_lower"),
+            ("Tenkan", "tenkan"),
+            ("Kijun", "kijun"),
         ]:
             values = chart_state.get(key) or []
             if index < len(values) and values[index] is not None:
@@ -2025,6 +3298,23 @@ del "%~f0" > nul 2> nul
         for child in list(element):
             local_name = child.tag.split("}")[-1]
             if local_name == name and child.text:
+                return child.text
+        return ""
+
+    @staticmethod
+    def xml_link(element):
+        direct = element.findtext("link")
+        if direct:
+            return direct
+        for child in list(element):
+            local_name = child.tag.split("}")[-1]
+            if local_name == "link":
+                href = child.attrib.get("href")
+                if href:
+                    return href
+                if child.text:
+                    return child.text
+            if local_name == "guid" and child.text:
                 return child.text
         return ""
 

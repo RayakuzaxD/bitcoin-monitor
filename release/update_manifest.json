@@ -1,11 +1,12 @@
 {
-    "version":  "0.2.0",
-    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.2.0",
-    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.2.0/BitcoinMonitor.exe",
-    "sha256":  "f206233ec506f6c2d5ea9c0a1e4a1c36fda61ce89bad8d7cb0117c54b83dfd28",
+    "version":  "0.3.0",
+    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.3.0",
+    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.3.0/BitcoinMonitor.exe",
+    "sha256":  "c008a4d6a89ef26419cc27c1344ffe93349e15338d59eb17a1166780d9d702cc",
     "notes":  [
-                  "Grafico de indicadores com camadas selecionaveis.",
-                  "Noticias atualizadas por RSS.",
-                  "Base de auto-update via GitHub Releases."
+                  "Cache local em SQLite para reduzir falhas e rate limit.",
+                  "Novas abas de Rede e Derivativos com mempool blocks, funding, open interest, long/short e opcoes Deribit.",
+                  "Indicadores avancados no grafico: EMA, Keltner, Donchian, Ichimoku, ATR, ADX, Stoch RSI, MFI, OBV e VWMA.",
+                  "Noticias com mais fontes, classificacao por tema e impacto."
               ]
 }
