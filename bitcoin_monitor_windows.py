@@ -96,7 +96,7 @@ def fetch_json(url, timeout=10):
         },
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = response.read().decode("utf-8")
+        payload = response.read().decode("utf-8-sig")
         return json.loads(payload)
 
 
@@ -106,7 +106,7 @@ def fetch_text(url, timeout=10):
         headers={"User-Agent": "BitcoinMonitor/1.0 (+https://localhost)"},
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8").strip()
+        return response.read().decode("utf-8-sig").strip()
 
 
 def download_file(url, destination, timeout=60):
