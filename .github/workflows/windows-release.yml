@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version without v, for example 0.4.1"
+        description: "Release version without v, for example 0.5.0"
         required: true
-        default: "0.4.1"
+        default: "0.5.0"
 
 permissions:
   contents: write
@@ -65,9 +65,10 @@ jobs:
             download_url = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/BitcoinMonitor.exe"
             sha256 = $sha
             notes = @(
-              "Correcao do empacotamento Windows para incluir vcruntime140_1.dll exigida pelo Python 3.13.",
-              "Build gerada sem UPX para reduzir falso positivo e falhas de carregamento de DLL.",
-              "Mantem a aba Macro/Ciclo e os indicadores diarios adicionados na v0.4.0."
+              "Nova aba Carteira/Risco com P/L, alocacao, DCA, risco 30D e persistencia local.",
+              "Nova aba Relatorio 7D/30D consolidando mercado, tecnica, derivativos, rede, macro, carteira e noticias.",
+              "Relatorio pode ser copiado para acompanhamento semanal.",
+              "Mantem a correcao de empacotamento Windows com DLLs de runtime."
             )
           }
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

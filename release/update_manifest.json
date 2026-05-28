@@ -1,11 +1,12 @@
 {
-    "version":  "0.4.1",
-    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.1",
-    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.1/BitcoinMonitor.exe",
-    "sha256":  "29ec8fe0fb210bf9b3cf54c9b81653ee43031d41a6a981831dc9e4f5dc3a7214",
+    "version":  "0.5.0",
+    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.5.0",
+    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.5.0/BitcoinMonitor.exe",
+    "sha256":  "09fcd5efd29e0c2b9253133e985dcda5a31eb00f4b911b2111484b01be39d53d",
     "notes":  [
-                  "Correcao do empacotamento Windows para incluir vcruntime140_1.dll exigida pelo Python 3.13.",
-                  "Build gerada sem UPX para reduzir falso positivo e falhas de carregamento de DLL.",
-                  "Mantem a aba Macro/Ciclo e os indicadores diarios adicionados na v0.4.0."
+                  "Nova aba Carteira/Risco com P/L, alocacao, DCA, risco 30D e persistencia local.",
+                  "Nova aba Relatorio 7D/30D consolidando mercado, tecnica, derivativos, rede, macro, carteira e noticias.",
+                  "Relatorio pode ser copiado para acompanhamento semanal.",
+                  "Mantem a correcao de empacotamento Windows com DLLs de runtime."
               ]
 }

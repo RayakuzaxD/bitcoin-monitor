@@ -30,6 +30,8 @@ run_windows_app.bat
 - Aba Derivativos com funding, funding anualizado, basis mark/index, open interest, OI 7D/30D, long/short ratio, taker buy/sell e opcoes Deribit.
 - Aba Rede com mempool, fees, blocos projetados, altura do bloco e ajuste de dificuldade.
 - Aba Macro/Ciclo com dados oficiais do FRED, Mayer Multiple, Pi Cycle, 200W multiple, halving, subsidy, supply e emissao anual.
+- Aba Carteira/Risco com quantidade de BTC, preco medio, P/L, alocacao, DCA, VaR 30D aproximado e persistencia local.
+- Aba Relatorio com resumo 7D/30D de mercado, tecnica, derivativos, rede, macro, carteira, noticias e pontos de atencao.
 - Aba Noticias com RSS publico, deduplicacao, classificacao por tema e leitura de impacto.
 - Alertas locais para preco, variacao, fees, mempool, funding, open interest e long/short.
 - Cache local em SQLite para reduzir rate limit e manter dados recentes quando alguma fonte publica falhar.
@@ -60,7 +62,7 @@ Esse comando gera:
 dist\BitcoinMonitor.exe
 release\BitcoinMonitor.exe
 release\update_manifest.json
-BitcoinMonitor-v0.4.1-release.zip
+BitcoinMonitor-v0.5.0-release.zip
 ```
 
 ## Auto-update
@@ -75,9 +77,9 @@ O manifesto tem este formato:
 
 ```json
 {
-  "version": "0.4.1",
-  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.1",
-  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.1/BitcoinMonitor.exe",
+  "version": "0.5.0",
+  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.5.0",
+  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.5.0/BitcoinMonitor.exe",
   "sha256": "...",
   "notes": ["Notas da versao"]
 }
@@ -97,7 +99,7 @@ Para publicar manualmente a proxima versao:
 
 ```powershell
 .\build_windows_exe.ps1
-gh release create v0.4.1 release\BitcoinMonitor.exe BitcoinMonitor-v0.4.1-release.zip release\update_manifest.json --title v0.4.1 --notes-file release\update_manifest.json
+gh release create v0.5.0 release\BitcoinMonitor.exe BitcoinMonitor-v0.5.0-release.zip release\update_manifest.json --title v0.5.0 --notes-file release\update_manifest.json
 ```
 
 ## Problemas comuns
@@ -115,5 +117,6 @@ O app grava dados do usuario em:
 Principais arquivos:
 
 - `alerts.json`: alertas locais.
+- `portfolio.json`: carteira local informada pelo usuario.
 - `bitcoin_monitor.db`: cache HTTP, snapshots e noticias recentes.
 - `update_config.json`: URL customizada de manifesto, quando existir.

@@ -29,9 +29,10 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "Bitcoin Monitor"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.5.0"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
+PORTFOLIO_FILE = APP_DIR / "portfolio.json"
 DB_FILE = APP_DIR / "bitcoin_monitor.db"
 UPDATE_CONFIG_FILE = APP_DIR / "update_config.json"
 DEFAULT_UPDATE_MANIFEST_URL = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/latest/download/update_manifest.json"
@@ -453,6 +454,19 @@ def format_btc(value):
     if value is None or not math.isfinite(value):
         return "--"
     return f"{format_number(value, 2)} BTC"
+
+
+def format_btc_precise(value):
+    if value is None or not math.isfinite(value):
+        return "--"
+    return f"{format_number(value, 8)} BTC"
+
+
+def format_signed_currency(value, currency="USD"):
+    if value is None or not math.isfinite(value):
+        return "--"
+    sign = "+" if value > 0 else ""
+    return f"{sign}{format_currency(value, currency)}"
 
 
 def format_timestamp_ms(value):
@@ -1116,12 +1130,17 @@ class BitcoinMonitorApp(Tk):
         self.indicator_chart_state = {}
         self.derivatives_chart_state = {}
         self.alerts = self.load_alerts()
+        self.portfolio = self.load_portfolio()
         self.value_vars = {}
         self.indicator_vars = {}
         self.derivative_vars = {}
         self.onchain_vars = {}
         self.macro_vars = {}
         self.cycle_vars = {}
+        self.portfolio_inputs = {}
+        self.portfolio_vars = {}
+        self.portfolio_state = {}
+        self.report_period = StringVar(value="30D")
         self.macro_chart_state = {}
 
         self.setup_styles()
@@ -1229,6 +1248,8 @@ class BitcoinMonitorApp(Tk):
         derivatives_tab = Frame(self.notebook, bg=COLORS["bg"])
         onchain_tab = Frame(self.notebook, bg=COLORS["bg"])
         macro_tab = Frame(self.notebook, bg=COLORS["bg"])
+        portfolio_tab = Frame(self.notebook, bg=COLORS["bg"])
+        report_tab = Frame(self.notebook, bg=COLORS["bg"])
         news_tab = Frame(self.notebook, bg=COLORS["bg"])
         update_tab = Frame(self.notebook, bg=COLORS["bg"])
         self.notebook.add(dashboard_tab, text="Painel")
@@ -1236,6 +1257,8 @@ class BitcoinMonitorApp(Tk):
         self.notebook.add(derivatives_tab, text="Derivativos")
         self.notebook.add(onchain_tab, text="Rede")
         self.notebook.add(macro_tab, text="Macro/Ciclo")
+        self.notebook.add(portfolio_tab, text="Carteira")
+        self.notebook.add(report_tab, text="Relatorio")
         self.notebook.add(news_tab, text="Noticias")
         self.notebook.add(update_tab, text="Atualizacao")
 
@@ -1389,6 +1412,8 @@ class BitcoinMonitorApp(Tk):
         self.build_derivatives_tab(derivatives_tab)
         self.build_onchain_tab(onchain_tab)
         self.build_macro_tab(macro_tab)
+        self.build_portfolio_tab(portfolio_tab)
+        self.build_report_tab(report_tab)
         self.build_news_tab(news_tab)
         self.build_update_tab(update_tab)
 
@@ -1939,6 +1964,159 @@ class BitcoinMonitorApp(Tk):
         self.macro_text = self.make_text(signal_panel, height=18, font=("Segoe UI", 9))
         self.macro_text.pack(fill=BOTH, expand=True, pady=(12, 0))
 
+    def build_portfolio_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Controle local, risco e alocacao",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Carteira/Risco",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        self.make_button(header, "Salvar carteira", self.save_portfolio_from_inputs, primary=True).pack(side=RIGHT)
+
+        form_panel = self.panel(parent)
+        form_panel.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        form = Frame(form_panel, bg=COLORS["panel"])
+        form.pack(fill=X)
+        input_specs = [
+            ("BTC em carteira", "btc_amount"),
+            ("Preco medio USD", "avg_cost_usd"),
+            ("Caixa USD", "cash_usd"),
+            ("Patrimonio total USD", "total_equity_usd"),
+            ("Alocacao alvo %", "target_allocation"),
+            ("DCA mensal USD", "dca_monthly_usd"),
+        ]
+        for idx, (label, key) in enumerate(input_specs):
+            form.grid_columnconfigure(idx % 3, weight=1)
+            cell = Frame(form, bg=COLORS["panel"])
+            cell.grid(row=idx // 3, column=idx % 3, sticky="ew", padx=(0 if idx % 3 == 0 else 10, 0), pady=(0 if idx < 3 else 8, 0))
+            Label(
+                cell,
+                text=label,
+                bg=COLORS["panel"],
+                fg=COLORS["muted"],
+                font=("Segoe UI", 9, "bold"),
+            ).pack(anchor="w")
+            value = self.portfolio.get(key)
+            variable = StringVar(value="" if value in (None, "") else str(value))
+            self.portfolio_inputs[key] = variable
+            ttk.Entry(cell, textvariable=variable).pack(fill=X, pady=(5, 0))
+
+        buttons = Frame(form_panel, bg=COLORS["panel"])
+        buttons.pack(fill=X, pady=(10, 0))
+        self.make_button(buttons, "Atualizar leitura", self.apply_portfolio).pack(side=LEFT)
+        self.make_button(buttons, "Limpar carteira", self.clear_portfolio).pack(side=LEFT, padx=(8, 0))
+
+        lower = Frame(parent, bg=COLORS["bg"])
+        lower.grid(row=2, column=0, sticky="nsew")
+        lower.grid_columnconfigure(0, weight=2)
+        lower.grid_columnconfigure(1, weight=1)
+        lower.grid_rowconfigure(0, weight=1)
+
+        metrics_panel = self.panel(lower)
+        metrics_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        Label(
+            metrics_panel,
+            text="Metricas da carteira",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        grid = Frame(metrics_panel, bg=COLORS["panel"])
+        grid.pack(fill=BOTH, expand=True, pady=(12, 0))
+        portfolio_specs = [
+            ("Valor BTC USD", "btc_value_usd"),
+            ("Valor BTC BRL", "btc_value_brl"),
+            ("Custo base", "cost_basis"),
+            ("P/L", "pnl"),
+            ("P/L %", "pnl_percent"),
+            ("Alocacao", "allocation"),
+            ("BTC para alvo", "target_delta_btc"),
+            ("DCA mensal", "dca_monthly_btc"),
+            ("Risco 30D 95%", "var_30d"),
+            ("Queda -20%", "drop_20"),
+            ("Drawdown ATH", "ath_drawdown"),
+            ("Break-even", "breakeven"),
+        ]
+        for idx, (title, key) in enumerate(portfolio_specs):
+            grid.grid_columnconfigure(idx % 3, weight=1)
+            self.portfolio_vars[key] = StringVar(value="--")
+            self.metric_card(grid, title, self.portfolio_vars[key]).grid(
+                row=idx // 3,
+                column=idx % 3,
+                sticky="nsew",
+                padx=(0 if idx % 3 == 0 else 8, 0),
+                pady=(0 if idx < 3 else 8, 0),
+            )
+
+        risk_panel = self.panel(lower)
+        risk_panel.grid(row=0, column=1, sticky="nsew")
+        Label(
+            risk_panel,
+            text="Leitura de risco",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.portfolio_text = self.make_text(risk_panel, height=18, font=("Segoe UI", 9))
+        self.portfolio_text.pack(fill=BOTH, expand=True, pady=(12, 0))
+        self.apply_portfolio()
+
+    def build_report_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(1, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Resumo consolidado para acompanhamento",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Relatorio 7D/30D",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        period_box = ttk.Combobox(
+            header,
+            values=["7D", "30D"],
+            textvariable=self.report_period,
+            state="readonly",
+            width=8,
+            style="Dark.TCombobox",
+        )
+        period_box.pack(side=RIGHT, padx=(8, 0))
+        period_box.bind("<<ComboboxSelected>>", lambda _event: self.render_report())
+        self.make_button(header, "Copiar", self.copy_report).pack(side=RIGHT, padx=(8, 0))
+        self.make_button(header, "Gerar relatorio", self.render_report, primary=True).pack(side=RIGHT)
+
+        panel = self.panel(parent)
+        panel.grid(row=1, column=0, sticky="nsew")
+        self.report_text = self.make_text(panel, height=30, font=("Consolas", 10))
+        self.report_text.pack(fill=BOTH, expand=True)
+        self.render_report()
+
     def build_news_tab(self, parent):
         parent.grid_rowconfigure(1, weight=1)
         parent.grid_columnconfigure(0, weight=1)
@@ -2248,6 +2426,8 @@ class BitcoinMonitorApp(Tk):
         self.apply_derivatives(payload)
         self.apply_macro_cycle(payload)
         self.apply_fear_greed(payload.get("fear_greed"))
+        self.apply_portfolio()
+        self.render_report()
 
         if not errors:
             self.set_status("Dados sincronizados", "online")
@@ -2271,6 +2451,7 @@ class BitcoinMonitorApp(Tk):
         if items:
             self.news_items = items
             self.render_news()
+            self.render_report()
         if hasattr(self, "news_status_var"):
             if errors and items:
                 self.news_status_var.set(f"{len(items)} noticias, algumas fontes falharam")
@@ -2540,9 +2721,11 @@ del "%~f0" > nul 2> nul
 
         if tip_height:
             self.value_vars["block_height"].set(f"{int(tip_height):,}".replace(",", "."))
+            self.metrics["block_height"] = self.to_float(tip_height)
 
         if difficulty:
             change = self.to_float(difficulty.get("difficultyChange"))
+            self.metrics["difficulty_change"] = change
             self.value_vars["difficulty_change"].set(format_percent(change))
 
     def apply_onchain(self, payload):
@@ -2668,7 +2851,12 @@ del "%~f0" > nul 2> nul
             {
                 "funding_rate_pct": funding_pct,
                 "open_interest_usd": oi_usd,
+                "open_interest_7d": oi_7d,
+                "open_interest_30d": oi_30d,
                 "long_short_ratio": long_short,
+                "taker_ratio": taker,
+                "put_call_ratio": put_call,
+                "options_iv": average_iv,
             }
         )
 
@@ -2874,6 +3062,28 @@ del "%~f0" > nul 2> nul
         us10y_30d = fred_change(fred["fred_10y"], 30, absolute=True)
         vix_30d = fred_change(fred["fred_vix"], 30)
 
+        self.metrics.update(
+            {
+                "us10y": us10y,
+                "us10y_30d": us10y_30d,
+                "fed_funds": fed_funds,
+                "vix": vix,
+                "vix_30d": vix_30d,
+                "dollar": dollar,
+                "dollar_30d": dollar_30d,
+                "cpi_yoy": cpi_yoy,
+                "m2_yoy": m2_yoy,
+                "fed_balance_90d": fed_balance_90d,
+                "mayer_multiple": cycle.get("mayer_multiple"),
+                "pi_distance": cycle.get("pi_distance"),
+                "ma200w_multiple": cycle.get("ma200w_multiple"),
+                "volatility_30d": cycle.get("volatility_30d"),
+                "one_year_return": cycle.get("one_year_return"),
+                "halving_days": supply.get("halving_days") if supply else None,
+                "issuance_rate": supply.get("issuance_rate") if supply else None,
+            }
+        )
+
         self.macro_vars["us10y"].set(f"{format_number(us10y, 2)}% | 30D {format_number(us10y_30d, 2)} p.p.")
         self.macro_vars["fed_funds"].set(f"{format_number(fed_funds, 2)}%")
         self.macro_vars["vix"].set(f"{format_number(vix, 2)} | 30D {format_percent(vix_30d)}")
@@ -3054,6 +3264,218 @@ del "%~f0" > nul 2> nul
                 fill=COLORS["muted"],
                 font=("Segoe UI", 12, "bold"),
             )
+
+    def apply_portfolio(self):
+        if not self.portfolio_vars:
+            return
+
+        price_usd = self.metrics.get("price_usd")
+        price_brl = self.metrics.get("price_brl")
+        amount = self.portfolio_number("btc_amount") or 0
+        avg_cost = self.portfolio_number("avg_cost_usd")
+        cash_usd = self.portfolio_number("cash_usd") or 0
+        total_equity_input = self.portfolio_number("total_equity_usd")
+        target_allocation = self.portfolio_number("target_allocation")
+        dca_monthly = self.portfolio_number("dca_monthly_usd")
+
+        if not price_usd or amount <= 0:
+            for variable in self.portfolio_vars.values():
+                variable.set("--")
+            self.portfolio_state = {}
+            lines = [
+                "Informe a quantidade de BTC para ativar a leitura de carteira.",
+                "Os dados ficam salvos localmente em portfolio.json.",
+            ]
+            self.write_text_widget(getattr(self, "portfolio_text", None), lines, prefix="- ")
+            return
+
+        market_value = amount * price_usd
+        market_value_brl = amount * price_brl if price_brl else None
+        cost_basis = amount * avg_cost if avg_cost else None
+        pnl = market_value - cost_basis if cost_basis is not None else None
+        pnl_percent = (pnl / cost_basis) * 100 if pnl is not None and cost_basis else None
+        total_equity = total_equity_input or (market_value + cash_usd)
+        allocation = (market_value / total_equity) * 100 if total_equity else None
+        target_value = total_equity * target_allocation / 100 if total_equity and target_allocation is not None else None
+        target_delta_usd = target_value - market_value if target_value is not None else None
+        target_delta_btc = target_delta_usd / price_usd if target_delta_usd is not None and price_usd else None
+        dca_monthly_btc = dca_monthly / price_usd if dca_monthly and price_usd else None
+        volatility = self.metrics.get("volatility_30d")
+        var_30d = None
+        if volatility is not None:
+            var_30d = market_value * (volatility / 100) * math.sqrt(30 / 365) * 1.65
+        drop_20 = market_value * 0.2
+        ath_drawdown = self.metrics.get("ath_change")
+
+        self.portfolio_vars["btc_value_usd"].set(format_currency(market_value, "USD"))
+        self.portfolio_vars["btc_value_brl"].set(format_currency(market_value_brl, "BRL", 0))
+        self.portfolio_vars["cost_basis"].set(format_currency(cost_basis, "USD"))
+        self.portfolio_vars["pnl"].set(format_signed_currency(pnl, "USD"))
+        self.portfolio_vars["pnl_percent"].set(format_percent(pnl_percent))
+        self.portfolio_vars["allocation"].set(format_percent(allocation))
+        self.portfolio_vars["target_delta_btc"].set(format_btc_precise(target_delta_btc))
+        self.portfolio_vars["dca_monthly_btc"].set(format_btc_precise(dca_monthly_btc))
+        self.portfolio_vars["var_30d"].set(format_currency(var_30d, "USD"))
+        self.portfolio_vars["drop_20"].set(format_currency(drop_20, "USD"))
+        self.portfolio_vars["ath_drawdown"].set(format_percent(ath_drawdown))
+        self.portfolio_vars["breakeven"].set(format_currency(avg_cost, "USD"))
+
+        self.portfolio_state = {
+            "amount": amount,
+            "price_usd": price_usd,
+            "market_value": market_value,
+            "market_value_brl": market_value_brl,
+            "cost_basis": cost_basis,
+            "pnl": pnl,
+            "pnl_percent": pnl_percent,
+            "cash_usd": cash_usd,
+            "total_equity": total_equity,
+            "allocation": allocation,
+            "target_allocation": target_allocation,
+            "target_delta_usd": target_delta_usd,
+            "target_delta_btc": target_delta_btc,
+            "dca_monthly_btc": dca_monthly_btc,
+            "var_30d": var_30d,
+            "drop_20": drop_20,
+        }
+        self.write_text_widget(self.portfolio_text, self.build_portfolio_lines(), prefix="- ")
+
+    def build_portfolio_lines(self):
+        state = self.portfolio_state
+        if not state:
+            return ["Aguardando dados de carteira."]
+        lines = ["Dados de carteira ficam apenas neste computador."]
+        pnl = state.get("pnl")
+        pnl_percent = state.get("pnl_percent")
+        if pnl is not None:
+            status = "positivo" if pnl >= 0 else "negativo"
+            lines.append(f"P/L {status}: {format_signed_currency(pnl, 'USD')} ({format_percent(pnl_percent)}).")
+        allocation = state.get("allocation")
+        target = state.get("target_allocation")
+        if allocation is not None and target is not None:
+            diff = allocation - target
+            if abs(diff) <= 2:
+                lines.append("Alocacao perto do alvo informado.")
+            elif diff > 0:
+                lines.append(f"Alocacao acima do alvo em {format_number(diff, 1)} p.p.")
+            else:
+                lines.append(f"Alocacao abaixo do alvo em {format_number(abs(diff), 1)} p.p.")
+        if state.get("var_30d") is not None:
+            lines.append(f"VaR 30D 95% aproximado: {format_currency(state['var_30d'], 'USD')}.")
+        if state.get("drop_20") is not None:
+            lines.append(f"Uma queda de 20% reduziria cerca de {format_currency(state['drop_20'], 'USD')}.")
+        if state.get("dca_monthly_btc") is not None:
+            lines.append(f"DCA mensal informado compra cerca de {format_btc_precise(state['dca_monthly_btc'])}.")
+        funding = self.metrics.get("funding_rate_pct")
+        if funding is not None and funding > 0.05:
+            lines.append("Funding alto: risco de alavancagem comprada no mercado.")
+        vix = self.metrics.get("vix")
+        if vix is not None and vix >= 25:
+            lines.append("VIX elevado: risco macro global acima do normal.")
+        mayer = self.metrics.get("mayer_multiple")
+        if mayer is not None:
+            if mayer >= 2.4:
+                lines.append("Mayer Multiple historicamente aquecido.")
+            elif mayer <= 0.8:
+                lines.append("Mayer Multiple em zona historicamente fria.")
+        return lines
+
+    def render_report(self):
+        if not hasattr(self, "report_text"):
+            return
+        lines = self.build_report_lines(self.report_period.get())
+        self.write_text_widget(self.report_text, lines)
+
+    def build_report_lines(self, period):
+        change = self.metrics.get("change_7d" if period == "7D" else "change_30d")
+        daily_snapshot = calculate_indicators(self.indicator_candles.get("Diario", []))
+        weekly_snapshot = calculate_indicators(self.indicator_candles.get("Semanal", []))
+        lines = [
+            f"Bitcoin Monitor - Relatorio {period}",
+            f"Gerado em {dt.datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+            "",
+            "MERCADO",
+            f"- Preco BTC/USD: {format_currency(self.metrics.get('price_usd'), 'USD')}",
+            f"- Preco BTC/BRL: {format_currency(self.metrics.get('price_brl'), 'BRL', 0)}",
+            f"- Variacao {period}: {format_percent(change)}",
+            f"- Variacao 24h: {format_percent(self.metrics.get('change_24h'))}",
+            f"- Dominancia BTC: {format_number(self.metrics.get('btc_dominance'), 1)}%",
+            "",
+            "TECNICA",
+            f"- Diario: RSI14 {format_number(daily_snapshot.get('rsi14'), 1)} | ADX14 {format_number(daily_snapshot.get('adx14'), 1)} | ATR {format_percent(daily_snapshot.get('atr_percent'))}",
+            f"- Diario: MM200 {format_currency(daily_snapshot.get('ma200'), 'USD')} | Dist. MM200 {format_percent(daily_snapshot.get('distance_ma200'))}",
+            f"- Semanal: MM200 {format_currency(weekly_snapshot.get('ma200'), 'USD')} | Dist. MM200 {format_percent(weekly_snapshot.get('distance_ma200'))}",
+            f"- Mayer Multiple: {format_number(self.metrics.get('mayer_multiple'), 2)} | 200W multiple {format_number(self.metrics.get('ma200w_multiple'), 2)}",
+            "",
+            "DERIVATIVOS",
+            f"- Funding: {format_percent(self.metrics.get('funding_rate_pct'))}",
+            f"- Open interest: {format_compact_currency(self.metrics.get('open_interest_usd'), 'USD')} | 7D {format_percent(self.metrics.get('open_interest_7d'))}",
+            f"- Long/Short top traders: {format_number(self.metrics.get('long_short_ratio'), 2)} | Taker buy/sell {format_number(self.metrics.get('taker_ratio'), 2)}",
+            f"- Put/Call options: {format_number(self.metrics.get('put_call_ratio'), 2)} | IV media {format_percent(self.metrics.get('options_iv'))}",
+            "",
+            "REDE",
+            f"- Fee rapida: {format_number(self.metrics.get('fee_fastest'), 0)} sat/vB",
+            f"- Mempool: {format_number(self.metrics.get('mempool_vmb'), 1)} vMB",
+            f"- Dificuldade: {format_percent(self.metrics.get('difficulty_change'))}",
+            f"- Halving estimado: {format_number(self.metrics.get('halving_days'), 0)} dias | emissao anual {format_percent(self.metrics.get('issuance_rate'))}",
+            "",
+            "MACRO",
+            f"- US 10Y: {format_number(self.metrics.get('us10y'), 2)}% | 30D {format_number(self.metrics.get('us10y_30d'), 2)} p.p.",
+            f"- VIX: {format_number(self.metrics.get('vix'), 2)} | 30D {format_percent(self.metrics.get('vix_30d'))}",
+            f"- Dollar amplo 30D: {format_percent(self.metrics.get('dollar_30d'))}",
+            f"- CPI YoY: {format_percent(self.metrics.get('cpi_yoy'))} | M2 YoY {format_percent(self.metrics.get('m2_yoy'))}",
+            "",
+            "CARTEIRA",
+        ]
+        if self.portfolio_state:
+            lines.extend(
+                [
+                    f"- Valor BTC: {format_currency(self.portfolio_state.get('market_value'), 'USD')}",
+                    f"- P/L: {format_signed_currency(self.portfolio_state.get('pnl'), 'USD')} ({format_percent(self.portfolio_state.get('pnl_percent'))})",
+                    f"- Alocacao: {format_percent(self.portfolio_state.get('allocation'))}",
+                    f"- Risco 30D 95% aprox.: {format_currency(self.portfolio_state.get('var_30d'), 'USD')}",
+                ]
+            )
+        else:
+            lines.append("- Carteira nao configurada.")
+        lines.extend(["", "NOTICIAS RECENTES"])
+        for item in self.news_items[:5]:
+            lines.append(
+                f"- [{item.get('category', 'Mercado')}/{item.get('impact', 'normal')}] "
+                f"{item.get('source')}: {item.get('title')}"
+            )
+        if not self.news_items:
+            lines.append("- Aguardando noticias.")
+        lines.extend(["", "PONTOS DE ATENCAO"])
+        flags = self.build_report_flags(daily_snapshot)
+        lines.extend([f"- {flag}" for flag in flags] or ["- Nenhum ponto critico detectado pelos filtros atuais."])
+        return lines
+
+    def build_report_flags(self, daily_snapshot):
+        flags = []
+        if self.metrics.get("funding_rate_pct") is not None and self.metrics["funding_rate_pct"] > 0.05:
+            flags.append("Funding elevado pode indicar excesso de alavancagem comprada.")
+        if self.metrics.get("open_interest_7d") is not None and self.metrics["open_interest_7d"] > 10:
+            flags.append("Open interest subiu forte em 7D; movimentos podem ficar mais violentos.")
+        if self.metrics.get("vix") is not None and self.metrics["vix"] >= 25:
+            flags.append("VIX acima de 25 sinaliza estresse macro.")
+        if self.metrics.get("us10y_30d") is not None and self.metrics["us10y_30d"] > 0.25:
+            flags.append("Juro de 10 anos subiu mais de 0,25 p.p. em 30D.")
+        if daily_snapshot.get("distance_ma200") is not None and daily_snapshot["distance_ma200"] < 0:
+            flags.append("Preco diario abaixo da MM200.")
+        if daily_snapshot.get("rsi14") is not None and daily_snapshot["rsi14"] >= 70:
+            flags.append("RSI diario em sobrecompra.")
+        if daily_snapshot.get("rsi14") is not None and daily_snapshot["rsi14"] <= 30:
+            flags.append("RSI diario em sobrevenda.")
+        return flags
+
+    def copy_report(self):
+        if not hasattr(self, "report_text"):
+            return
+        content = self.report_text.get("1.0", END).strip()
+        self.clipboard_clear()
+        self.clipboard_append(content)
+        self.add_event("Relatorio", "Relatorio copiado para a area de transferencia.")
 
     def apply_fear_greed(self, payload):
         if not payload:
@@ -3738,6 +4160,62 @@ del "%~f0" > nul 2> nul
         except Exception:
             return []
         return []
+
+    def load_portfolio(self):
+        defaults = {
+            "btc_amount": "",
+            "avg_cost_usd": "",
+            "cash_usd": "",
+            "total_equity_usd": "",
+            "target_allocation": "",
+            "dca_monthly_usd": "",
+        }
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            if PORTFOLIO_FILE.exists():
+                data = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    defaults.update(data)
+        except Exception:
+            pass
+        return defaults
+
+    def save_portfolio_from_inputs(self):
+        data = {}
+        for key, variable in self.portfolio_inputs.items():
+            value = self.portfolio_number(key)
+            data[key] = "" if value is None else value
+            variable.set("" if value is None else str(value))
+        self.portfolio = data
+        self.save_portfolio()
+        self.apply_portfolio()
+        self.render_report()
+        self.add_event("Carteira", "Carteira salva localmente.")
+
+    def clear_portfolio(self):
+        for variable in self.portfolio_inputs.values():
+            variable.set("")
+        self.portfolio = self.load_portfolio()
+        for key in self.portfolio:
+            self.portfolio[key] = ""
+        self.save_portfolio()
+        self.apply_portfolio()
+        self.render_report()
+        self.add_event("Carteira", "Carteira local limpa.")
+
+    def save_portfolio(self):
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            PORTFOLIO_FILE.write_text(json.dumps(self.portfolio, indent=2), encoding="utf-8")
+        except Exception as exc:
+            self.add_event("Arquivo", f"Nao foi possivel salvar carteira: {exc}")
+
+    def portfolio_number(self, key):
+        variable = self.portfolio_inputs.get(key)
+        raw = variable.get() if variable else self.portfolio.get(key)
+        if isinstance(raw, str):
+            raw = raw.strip().replace(".", "").replace(",", ".") if "," in raw else raw.strip()
+        return self.to_float(raw)
 
     def save_alerts(self):
         try:
