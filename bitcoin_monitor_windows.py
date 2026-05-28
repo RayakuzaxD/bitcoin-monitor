@@ -29,7 +29,7 @@ APP_VERSION = "0.2.0"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
 UPDATE_CONFIG_FILE = APP_DIR / "update_config.json"
-DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/main/release/update_manifest.json"
+DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/refs/heads/main/release/update_manifest.json"
 
 ENDPOINTS = {
     "coingecko": (
