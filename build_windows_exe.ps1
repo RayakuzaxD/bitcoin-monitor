@@ -1,12 +1,20 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
-$version = "0.4.0"
+$version = "0.4.1"
 $tag = "v$version"
 $buildDist = Join-Path $PSScriptRoot "dist-build"
+$pythonRoot = (& python -c "import sys; print(sys.base_prefix)").Trim()
+$runtimeBinaries = @()
+foreach ($dll in @("vcruntime140.dll", "vcruntime140_1.dll")) {
+  $candidate = Join-Path $pythonRoot $dll
+  if (Test-Path $candidate) {
+    $runtimeBinaries += @("--add-binary", "$candidate;.")
+  }
+}
 
 python -m pip install --user --upgrade pyinstaller
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name BitcoinMonitor --distpath "$buildDist" bitcoin_monitor_windows.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --name BitcoinMonitor --distpath "$buildDist" @runtimeBinaries bitcoin_monitor_windows.py
 if ($LASTEXITCODE -ne 0) {
   throw "PyInstaller falhou com codigo $LASTEXITCODE"
 }
@@ -33,10 +41,9 @@ $manifest = [ordered]@{
   download_url = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/$tag/BitcoinMonitor.exe"
   sha256 = $sha
   notes = @(
-    "Nova aba Macro/Ciclo com dados oficiais do FRED.",
-    "Metricas de ciclo Bitcoin: Mayer Multiple, Pi Cycle, 200W multiple, volatilidade 30D e retorno 1Y.",
-    "Metricas nativas de halving, subsidio, supply aproximado e emissao anual.",
-    "Indicadores agora tambem suportam periodo diario alem de semanal e mensal."
+    "Correcao do empacotamento Windows para incluir vcruntime140_1.dll exigida pelo Python 3.13.",
+    "Build gerada sem UPX para reduzir falso positivo e falhas de carregamento de DLL.",
+    "Mantem a aba Macro/Ciclo e os indicadores diarios adicionados na v0.4.0."
   )
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 4

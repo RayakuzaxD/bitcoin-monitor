@@ -29,7 +29,7 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "Bitcoin Monitor"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
 DB_FILE = APP_DIR / "bitcoin_monitor.db"

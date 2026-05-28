@@ -1,12 +1,11 @@
 {
-    "version":  "0.4.0",
-    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.0",
-    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.0/BitcoinMonitor.exe",
-    "sha256":  "a4149cb4d7ec5f86858de081261aa90f9bdc255cf113a48e93119ede79292cce",
+    "version":  "0.4.1",
+    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.1",
+    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.1/BitcoinMonitor.exe",
+    "sha256":  "29ec8fe0fb210bf9b3cf54c9b81653ee43031d41a6a981831dc9e4f5dc3a7214",
     "notes":  [
-                  "Nova aba Macro/Ciclo com dados oficiais do FRED.",
-                  "Metricas de ciclo Bitcoin: Mayer Multiple, Pi Cycle, 200W multiple, volatilidade 30D e retorno 1Y.",
-                  "Metricas nativas de halving, subsidio, supply aproximado e emissao anual.",
-                  "Indicadores agora tambem suportam periodo diario alem de semanal e mensal."
+                  "Correcao do empacotamento Windows para incluir vcruntime140_1.dll exigida pelo Python 3.13.",
+                  "Build gerada sem UPX para reduzir falso positivo e falhas de carregamento de DLL.",
+                  "Mantem a aba Macro/Ciclo e os indicadores diarios adicionados na v0.4.0."
               ]
 }

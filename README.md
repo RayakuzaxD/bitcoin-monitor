@@ -60,7 +60,7 @@ Esse comando gera:
 dist\BitcoinMonitor.exe
 release\BitcoinMonitor.exe
 release\update_manifest.json
-BitcoinMonitor-v0.4.0-release.zip
+BitcoinMonitor-v0.4.1-release.zip
 ```
 
 ## Auto-update
@@ -75,9 +75,9 @@ O manifesto tem este formato:
 
 ```json
 {
-  "version": "0.4.0",
-  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.0",
-  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.0/BitcoinMonitor.exe",
+  "version": "0.4.1",
+  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.1",
+  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.1/BitcoinMonitor.exe",
   "sha256": "...",
   "notes": ["Notas da versao"]
 }
@@ -97,8 +97,12 @@ Para publicar manualmente a proxima versao:
 
 ```powershell
 .\build_windows_exe.ps1
-gh release create v0.4.0 release\BitcoinMonitor.exe BitcoinMonitor-v0.4.0-release.zip release\update_manifest.json --title v0.4.0 --notes-file release\update_manifest.json
+gh release create v0.4.1 release\BitcoinMonitor.exe BitcoinMonitor-v0.4.1-release.zip release\update_manifest.json --title v0.4.1 --notes-file release\update_manifest.json
 ```
+
+## Problemas comuns
+
+Se o Windows mostrar `Failed to load Python DLL`, instale a versao mais recente publicada na release. A partir da `v0.4.1`, o pacote inclui as DLLs de runtime do Visual C++ usadas pelo Python 3.13.
 
 ## Arquivos locais
 

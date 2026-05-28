@@ -4,7 +4,7 @@
 a = Analysis(
     ['bitcoin_monitor_windows.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('C:\\Users\\vitor\\AppData\\Local\\Programs\\Python\\Python313\\vcruntime140.dll', '.'), ('C:\\Users\\vitor\\AppData\\Local\\Programs\\Python\\Python313\\vcruntime140_1.dll', '.')],
     datas=[],
     hiddenimports=[],
     hookspath=[],
@@ -26,7 +26,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
