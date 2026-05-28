@@ -13,7 +13,7 @@ $sha = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToLowerInvariant()
 $manifest = [ordered]@{
   version = "0.2.0"
   release_url = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.2.0"
-  download_url = "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/refs/heads/main/release/BitcoinMonitor.exe"
+  download_url = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.2.0/BitcoinMonitor.exe"
   sha256 = $sha
   notes = @(
     "Grafico de indicadores com camadas selecionaveis.",
