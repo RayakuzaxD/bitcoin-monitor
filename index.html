@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bitcoin Monitor</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="preconnect" href="https://api.coingecko.com" />
+    <link rel="preconnect" href="https://api.binance.com" />
+    <link rel="preconnect" href="https://mempool.space" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"
+    ></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"
+    ></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">B</div>
+          <div>
+            <p class="eyebrow">Monitor em tempo real</p>
+            <h1>Bitcoin Monitor</h1>
+          </div>
+        </div>
+
+        <div class="topbar-actions" aria-label="Controles principais">
+          <div class="connection-pill" id="connection-pill">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="connection-label">Conectando</span>
+          </div>
+          <button class="icon-button" id="refresh-button" type="button" title="Atualizar agora" aria-label="Atualizar agora">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+          <button class="icon-button" id="notification-button" type="button" title="Ativar notificações" aria-label="Ativar notificações">
+            <i data-lucide="bell"></i>
+          </button>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <section class="market-hero" aria-label="Resumo de mercado">
+          <div class="price-panel">
+            <div class="price-header">
+              <div>
+                <p class="label">BTC / USD</p>
+                <div class="price-row">
+                  <span id="btc-usd" class="main-price">$--</span>
+                  <span id="btc-change" class="change neutral">--</span>
+                </div>
+              </div>
+              <div class="price-side">
+                <p class="label">BTC / BRL</p>
+                <strong id="btc-brl">R$--</strong>
+              </div>
+            </div>
+            <div class="metric-grid">
+              <article class="metric-card">
+                <span>Volume 24h</span>
+                <strong id="volume-24h">--</strong>
+              </article>
+              <article class="metric-card">
+                <span>Market cap</span>
+                <strong id="market-cap">--</strong>
+              </article>
+              <article class="metric-card">
+                <span>Spread</span>
+                <strong id="spread">--</strong>
+              </article>
+              <article class="metric-card">
+                <span>Última atualização</span>
+                <strong id="last-updated">--</strong>
+              </article>
+            </div>
+          </div>
+
+          <div class="signal-panel">
+            <div class="signal-header">
+              <p class="label">Sinais rápidos</p>
+              <span id="data-quality" class="quality neutral">Aguardando dados</span>
+            </div>
+            <div class="signal-list">
+              <div class="signal-item">
+                <i data-lucide="activity"></i>
+                <div>
+                  <span>Fear & Greed</span>
+                  <strong id="fear-greed">--</strong>
+                </div>
+              </div>
+              <div class="signal-item">
+                <i data-lucide="zap"></i>
+                <div>
+                  <span>Fee rápida</span>
+                  <strong id="fast-fee">-- sat/vB</strong>
+                </div>
+              </div>
+              <div class="signal-item">
+                <i data-lucide="boxes"></i>
+                <div>
+                  <span>Altura do bloco</span>
+                  <strong id="block-height">--</strong>
+                </div>
+              </div>
+              <div class="signal-item">
+                <i data-lucide="database"></i>
+                <div>
+                  <span>Mempool</span>
+                  <strong id="mempool-size">--</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="chart-section" aria-label="Gráfico de preço">
+          <div class="section-toolbar">
+            <div>
+              <p class="label">Preço BTCUSDT</p>
+              <h2>Candles de mercado</h2>
+            </div>
+            <div class="segmented" aria-label="Intervalo do gráfico">
+              <button type="button" class="segment active" data-interval="1m">1m</button>
+              <button type="button" class="segment" data-interval="5m">5m</button>
+              <button type="button" class="segment" data-interval="15m">15m</button>
+              <button type="button" class="segment" data-interval="1h">1h</button>
+              <button type="button" class="segment" data-interval="1d">1d</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <div id="price-chart" class="price-chart" role="img" aria-label="Gráfico de candles do Bitcoin"></div>
+            <canvas id="fallback-chart" class="fallback-chart" width="1200" height="420" aria-hidden="true"></canvas>
+            <div id="chart-empty" class="empty-state">Carregando candles...</div>
+          </div>
+        </section>
+
+        <section class="lower-grid">
+          <div class="panel orderbook-panel">
+            <div class="section-toolbar compact">
+              <div>
+                <p class="label">Binance BTCUSDT</p>
+                <h2>Livro de ofertas</h2>
+              </div>
+              <span id="book-status" class="tiny-status">--</span>
+            </div>
+            <div class="book-header">
+              <span>Preço</span>
+              <span>Qtd.</span>
+              <span>Total</span>
+            </div>
+            <div id="asks" class="book-side asks"></div>
+            <div class="mid-price" id="mid-price">--</div>
+            <div id="bids" class="book-side bids"></div>
+          </div>
+
+          <div class="panel network-panel">
+            <div class="section-toolbar compact">
+              <div>
+                <p class="label">On-chain</p>
+                <h2>Rede Bitcoin</h2>
+              </div>
+            </div>
+            <div class="network-grid">
+              <article class="network-item">
+                <span>Fee econômica</span>
+                <strong id="economy-fee">--</strong>
+              </article>
+              <article class="network-item">
+                <span>Fee 1h</span>
+                <strong id="hour-fee">--</strong>
+              </article>
+              <article class="network-item">
+                <span>Transações</span>
+                <strong id="mempool-count">--</strong>
+              </article>
+              <article class="network-item">
+                <span>Ajuste dificuldade</span>
+                <strong id="difficulty-change">--</strong>
+              </article>
+            </div>
+            <div class="network-bar">
+              <div class="network-bar-fill" id="mempool-bar"></div>
+            </div>
+          </div>
+
+          <div class="panel alerts-panel">
+            <div class="section-toolbar compact">
+              <div>
+                <p class="label">Local</p>
+                <h2>Alertas</h2>
+              </div>
+              <button class="text-button" id="clear-alerts" type="button">Limpar</button>
+            </div>
+            <form id="alert-form" class="alert-form">
+              <select id="alert-metric" aria-label="Métrica do alerta">
+                <option value="priceUsd">Preço USD</option>
+                <option value="priceBrl">Preço BRL</option>
+                <option value="change24h">Variação 24h %</option>
+                <option value="feeFastest">Fee rápida sat/vB</option>
+                <option value="mempoolVmb">Mempool vMB</option>
+              </select>
+              <select id="alert-operator" aria-label="Operador do alerta">
+                <option value="above">acima de</option>
+                <option value="below">abaixo de</option>
+              </select>
+              <input id="alert-value" type="number" step="0.01" min="0" placeholder="Valor" aria-label="Valor do alerta" required />
+              <button class="icon-button primary" type="submit" title="Criar alerta" aria-label="Criar alerta">
+                <i data-lucide="plus"></i>
+              </button>
+            </form>
+            <div id="active-alerts" class="active-alerts"></div>
+          </div>
+
+          <div class="panel feed-panel">
+            <div class="section-toolbar compact">
+              <div>
+                <p class="label">Eventos</p>
+                <h2>Timeline</h2>
+              </div>
+            </div>
+            <div id="event-feed" class="event-feed"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
