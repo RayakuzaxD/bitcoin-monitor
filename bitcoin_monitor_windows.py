@@ -1,3 +1,4 @@
+import base64
 import concurrent.futures
 import datetime as dt
 import email.utils
@@ -29,7 +30,7 @@ APP_VERSION = "0.2.0"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
 UPDATE_CONFIG_FILE = APP_DIR / "update_config.json"
-DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/refs/heads/main/release/update_manifest.json"
+DEFAULT_UPDATE_MANIFEST_URL = "https://api.github.com/repos/RayakuzaxD/bitcoin-monitor/contents/release/update_manifest.json?ref=main"
 
 ENDPOINTS = {
     "coingecko": (
@@ -107,6 +108,15 @@ def fetch_text(url, timeout=10):
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8-sig").strip()
+
+
+def fetch_update_manifest(url, timeout=15):
+    data = fetch_json(url, timeout)
+    if isinstance(data, dict) and data.get("encoding") == "base64" and data.get("content"):
+        packed = "".join(str(data["content"]).split())
+        text = base64.b64decode(packed).decode("utf-8-sig")
+        return json.loads(text)
+    return data
 
 
 def download_file(url, destination, timeout=60):
@@ -1225,7 +1235,7 @@ class BitcoinMonitorApp(Tk):
 
     def update_worker(self, manifest_url):
         try:
-            manifest = fetch_json(manifest_url, 15)
+            manifest = fetch_update_manifest(manifest_url, 15)
             self.data_queue.put({"_kind": "update", "manifest": manifest, "error": None})
         except Exception as exc:
             self.data_queue.put({"_kind": "update", "manifest": None, "error": str(exc)})
