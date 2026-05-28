@@ -1,8 +1,8 @@
-﻿{
+{
     "version":  "0.2.0",
     "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.2.0",
     "download_url":  "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/main/release/BitcoinMonitor.exe",
-    "sha256":  "d1b9786a7d49ab15350242feb21c7b7cc4c644de8061a5e7abd36e18f8996394",
+    "sha256":  "61f5465d3e8f2563f571434444c29a3d903086fd8a4dd6a43bfaef2dca202658",
     "notes":  [
                   "Grafico de indicadores com camadas selecionaveis.",
                   "Noticias atualizadas por RSS.",
