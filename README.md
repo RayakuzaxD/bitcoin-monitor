@@ -1,6 +1,6 @@
 # Bitcoin Monitor
 
-Monitor profissional de Bitcoin para Windows, com painel de mercado, rede Bitcoin, noticias, alertas, indicadores tecnicos e dados publicos de derivativos.
+Monitor profissional de Bitcoin para Windows, com painel de mercado, rede Bitcoin, macro, ciclo, noticias, alertas, indicadores tecnicos e dados publicos de derivativos.
 
 ## Como rodar no Windows
 
@@ -25,10 +25,11 @@ run_windows_app.bat
 ## Recursos atuais
 
 - Painel principal com BTC/USD, BTC/BRL, variacao 24h, 7D e 30D, dominancia BTC, market cap, volume, spread e order book.
-- Aba Indicadores com visao semanal e mensal, grafico interativo e camadas selecionaveis.
+- Aba Indicadores com visao diaria, semanal e mensal, grafico interativo e camadas selecionaveis.
 - Indicadores tecnicos: MM50, MM100, MM200, EMA21, EMA50, Bollinger, Keltner, Donchian, Ichimoku, RSI14, MACD, ATR14, ADX14, Stoch RSI, MFI, OBV, VWMA20 e volume.
 - Aba Derivativos com funding, funding anualizado, basis mark/index, open interest, OI 7D/30D, long/short ratio, taker buy/sell e opcoes Deribit.
 - Aba Rede com mempool, fees, blocos projetados, altura do bloco e ajuste de dificuldade.
+- Aba Macro/Ciclo com dados oficiais do FRED, Mayer Multiple, Pi Cycle, 200W multiple, halving, subsidy, supply e emissao anual.
 - Aba Noticias com RSS publico, deduplicacao, classificacao por tema e leitura de impacto.
 - Alertas locais para preco, variacao, fees, mempool, funding, open interest e long/short.
 - Cache local em SQLite para reduzir rate limit e manter dados recentes quando alguma fonte publica falhar.
@@ -41,6 +42,7 @@ run_windows_app.bat
 - Deribit public API: resumo de opcoes BTC.
 - CoinGecko API: preco agregado, BTC/BRL, market cap, volume, dominancia e variacoes 1h/24h/7d/30d.
 - mempool.space API: fees, mempool, blocos projetados, altura do bloco e ajuste de dificuldade.
+- Federal Reserve/FRED: US 10Y, Fed Funds, VIX, dollar amplo, CPI, M2 e balanco do Fed.
 - Alternative.me: Fear & Greed Index.
 - RSS: Cointelegraph BR, CoinDesk, Bitcoin Magazine, Bitcoin Optech, Decrypt e CryptoSlate.
 
@@ -58,7 +60,7 @@ Esse comando gera:
 dist\BitcoinMonitor.exe
 release\BitcoinMonitor.exe
 release\update_manifest.json
-BitcoinMonitor-v0.3.0-release.zip
+BitcoinMonitor-v0.4.0-release.zip
 ```
 
 ## Auto-update
@@ -73,9 +75,9 @@ O manifesto tem este formato:
 
 ```json
 {
-  "version": "0.3.0",
-  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.3.0",
-  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.3.0/BitcoinMonitor.exe",
+  "version": "0.4.0",
+  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.0",
+  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.0/BitcoinMonitor.exe",
   "sha256": "...",
   "notes": ["Notas da versao"]
 }
@@ -95,7 +97,7 @@ Para publicar manualmente a proxima versao:
 
 ```powershell
 .\build_windows_exe.ps1
-gh release create v0.3.0 release\BitcoinMonitor.exe BitcoinMonitor-v0.3.0-release.zip release\update_manifest.json --title v0.3.0 --notes-file release\update_manifest.json
+gh release create v0.4.0 release\BitcoinMonitor.exe BitcoinMonitor-v0.4.0-release.zip release\update_manifest.json --title v0.4.0 --notes-file release\update_manifest.json
 ```
 
 ## Arquivos locais

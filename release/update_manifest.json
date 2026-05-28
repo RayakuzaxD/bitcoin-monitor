@@ -1,12 +1,12 @@
 {
-    "version":  "0.3.0",
-    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.3.0",
-    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.3.0/BitcoinMonitor.exe",
-    "sha256":  "c008a4d6a89ef26419cc27c1344ffe93349e15338d59eb17a1166780d9d702cc",
+    "version":  "0.4.0",
+    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.4.0",
+    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.4.0/BitcoinMonitor.exe",
+    "sha256":  "a4149cb4d7ec5f86858de081261aa90f9bdc255cf113a48e93119ede79292cce",
     "notes":  [
-                  "Cache local em SQLite para reduzir falhas e rate limit.",
-                  "Novas abas de Rede e Derivativos com mempool blocks, funding, open interest, long/short e opcoes Deribit.",
-                  "Indicadores avancados no grafico: EMA, Keltner, Donchian, Ichimoku, ATR, ADX, Stoch RSI, MFI, OBV e VWMA.",
-                  "Noticias com mais fontes, classificacao por tema e impacto."
+                  "Nova aba Macro/Ciclo com dados oficiais do FRED.",
+                  "Metricas de ciclo Bitcoin: Mayer Multiple, Pi Cycle, 200W multiple, volatilidade 30D e retorno 1Y.",
+                  "Metricas nativas de halving, subsidio, supply aproximado e emissao anual.",
+                  "Indicadores agora tambem suportam periodo diario alem de semanal e mensal."
               ]
 }

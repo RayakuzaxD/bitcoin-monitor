@@ -1,9 +1,11 @@
 import base64
 import concurrent.futures
+import csv
 import datetime as dt
 import email.utils
 import hashlib
 import html
+import io
 import json
 import math
 import os
@@ -27,7 +29,7 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "Bitcoin Monitor"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
 DB_FILE = APP_DIR / "bitcoin_monitor.db"
@@ -49,6 +51,7 @@ ENDPOINTS = {
     "coingecko_global": "https://api.coingecko.com/api/v3/global",
     "binance_ticker": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
     "candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={interval}&limit=180",
+    "daily_candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1000",
     "weekly_candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&limit=500",
     "monthly_candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1M&limit=240",
     "depth": "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20",
@@ -79,6 +82,19 @@ ENDPOINTS = {
     ),
 }
 
+FRED_SERIES = {
+    "fred_10y": ("US 10Y", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"),
+    "fred_fed_funds": ("Fed Funds", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFF"),
+    "fred_vix": ("VIX", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=VIXCLS"),
+    "fred_dollar": ("Dollar amplo", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS"),
+    "fred_cpi": ("CPI", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"),
+    "fred_m2": ("M2", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=M2SL"),
+    "fred_fed_balance": ("Balanco Fed", "https://fred.stlouisfed.org/graph/fredgraph.csv?id=WALCL"),
+}
+
+HALVING_INTERVAL = 210_000
+INITIAL_SUBSIDY = 50.0
+
 NEWS_FEEDS = [
     ("Cointelegraph BR", "https://cointelegraph.com.br/rss/tag/bitcoin"),
     ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
@@ -94,6 +110,7 @@ CACHE_TTLS = {
     "coingecko_global": 300,
     "binance_ticker": 15,
     "candles": 30,
+    "daily_candles": 3_600,
     "weekly_candles": 10_800,
     "monthly_candles": 21_600,
     "depth": 15,
@@ -110,6 +127,13 @@ CACHE_TTLS = {
     "futures_long_short": 600,
     "futures_taker_ratio": 600,
     "deribit_options": 300,
+    "fred_10y": 21_600,
+    "fred_fed_funds": 21_600,
+    "fred_vix": 21_600,
+    "fred_dollar": 21_600,
+    "fred_cpi": 43_200,
+    "fred_m2": 43_200,
+    "fred_fed_balance": 43_200,
 }
 
 NEWS_CATEGORIES = [
@@ -187,11 +211,39 @@ def fetch_update_manifest(url, timeout=15):
     return data
 
 
+def fetch_fred_series(url, timeout=20):
+    text = fetch_text(url, timeout)
+    reader = csv.DictReader(io.StringIO(text))
+    rows = []
+    for row in reader:
+        if not row:
+            continue
+        date_value = row.get("observation_date") or row.get("DATE") or row.get("date")
+        value = None
+        for key, raw in row.items():
+            if key and key.lower() not in ("observation_date", "date"):
+                value = raw
+                break
+        numeric = parse_float(value)
+        if date_value and numeric is not None:
+            rows.append({"date": date_value, "value": numeric})
+    return rows
+
+
 def download_file(url, destination, timeout=60):
     request = urllib.request.Request(url, headers={"User-Agent": f"BitcoinMonitor/{APP_VERSION}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         with open(destination, "wb") as file:
             shutil.copyfileobj(response, file)
+
+
+def parse_float(value):
+    try:
+        if value is None or value == ".":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class LocalStore:
@@ -780,6 +832,123 @@ def percent_distance(value, base):
     return ((value / base) - 1) * 100
 
 
+def calculate_supply(height):
+    if height is None:
+        return {}
+    try:
+        blocks_mined = int(height) + 1
+    except (TypeError, ValueError):
+        return {}
+    remaining = max(blocks_mined, 0)
+    supply = 0.0
+    epoch = 0
+    while remaining > 0 and epoch < 34:
+        blocks = min(remaining, HALVING_INTERVAL)
+        subsidy = INITIAL_SUBSIDY / (2 ** epoch)
+        supply += blocks * subsidy
+        remaining -= blocks
+        epoch += 1
+    current_epoch = max(0, int(height) // HALVING_INTERVAL)
+    current_subsidy = INITIAL_SUBSIDY / (2 ** current_epoch) if current_epoch < 34 else 0
+    next_halving = (current_epoch + 1) * HALVING_INTERVAL
+    remaining_blocks = max(next_halving - int(height), 0)
+    days_remaining = remaining_blocks * 10 / 1440
+    annual_issuance = current_subsidy * 144 * 365
+    issuance_rate = (annual_issuance / supply) * 100 if supply else None
+    return {
+        "epoch": current_epoch,
+        "supply": supply,
+        "subsidy": current_subsidy,
+        "next_halving": next_halving,
+        "halving_blocks": remaining_blocks,
+        "halving_days": days_remaining,
+        "annual_issuance": annual_issuance,
+        "issuance_rate": issuance_rate,
+    }
+
+
+def latest_fred_value(rows):
+    for row in reversed(rows or []):
+        value = parse_float(row.get("value"))
+        if value is not None:
+            return row.get("date"), value
+    return None, None
+
+
+def fred_value_before(rows, days):
+    if not rows:
+        return None
+    latest_date_text, _latest = latest_fred_value(rows)
+    if not latest_date_text:
+        return None
+    try:
+        target = dt.datetime.strptime(latest_date_text, "%Y-%m-%d").date() - dt.timedelta(days=days)
+    except ValueError:
+        return None
+    selected = None
+    for row in rows:
+        try:
+            row_date = dt.datetime.strptime(row.get("date", ""), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        value = parse_float(row.get("value"))
+        if value is not None and row_date <= target:
+            selected = value
+    return selected
+
+
+def fred_change(rows, days, absolute=False):
+    _date, latest = latest_fred_value(rows)
+    previous = fred_value_before(rows, days)
+    if latest is None or previous in (None, 0):
+        return None
+    if absolute:
+        return latest - previous
+    return ((latest / previous) - 1) * 100
+
+
+def calculate_cycle_metrics(daily_candles, weekly_candles):
+    if not daily_candles:
+        return {}
+    closes = [item["close"] for item in daily_candles]
+    if not closes:
+        return {}
+    last = closes[-1]
+    ma200d = sma(closes, 200)
+    ma111d = sma(closes, 111)
+    ma350d = sma(closes, 350)
+    ma365d = sma(closes, 365)
+    mayer = last / ma200d if ma200d else None
+    pi_top = ma350d * 2 if ma350d else None
+    pi_distance = percent_distance(ma111d, pi_top) if ma111d and pi_top else None
+    one_year_return = percent_distance(last, closes[-366]) if len(closes) >= 366 else None
+    returns = []
+    for index in range(max(1, len(closes) - 30), len(closes)):
+        previous = closes[index - 1]
+        if previous:
+            returns.append(math.log(closes[index] / previous))
+    volatility = None
+    if len(returns) > 1:
+        mean = sum(returns) / len(returns)
+        variance = sum((item - mean) ** 2 for item in returns) / (len(returns) - 1)
+        volatility = math.sqrt(variance) * math.sqrt(365) * 100
+    weekly_closes = [item["close"] for item in weekly_candles or []]
+    ma200w = sma(weekly_closes, 200)
+    return {
+        "last_close": last,
+        "ma200d": ma200d,
+        "ma365d": ma365d,
+        "mayer_multiple": mayer,
+        "pi_111d": ma111d,
+        "pi_350d_2x": pi_top,
+        "pi_distance": pi_distance,
+        "one_year_return": one_year_return,
+        "volatility_30d": volatility,
+        "ma200w": ma200w,
+        "ma200w_multiple": last / ma200w if ma200w else None,
+    }
+
+
 def calculate_indicators(candles):
     closes = [item["close"] for item in candles]
     volumes = [item["volume"] for item in candles]
@@ -939,7 +1108,7 @@ class BitcoinMonitorApp(Tk):
 
         self.metrics = {}
         self.candles = []
-        self.indicator_candles = {"Semanal": [], "Mensal": []}
+        self.indicator_candles = {"Diario": [], "Semanal": [], "Mensal": []}
         self.depth = {"asks": [], "bids": []}
         self.events = []
         self.news_items = []
@@ -951,6 +1120,9 @@ class BitcoinMonitorApp(Tk):
         self.indicator_vars = {}
         self.derivative_vars = {}
         self.onchain_vars = {}
+        self.macro_vars = {}
+        self.cycle_vars = {}
+        self.macro_chart_state = {}
 
         self.setup_styles()
         self.build_ui()
@@ -1056,12 +1228,14 @@ class BitcoinMonitorApp(Tk):
         indicators_tab = Frame(self.notebook, bg=COLORS["bg"])
         derivatives_tab = Frame(self.notebook, bg=COLORS["bg"])
         onchain_tab = Frame(self.notebook, bg=COLORS["bg"])
+        macro_tab = Frame(self.notebook, bg=COLORS["bg"])
         news_tab = Frame(self.notebook, bg=COLORS["bg"])
         update_tab = Frame(self.notebook, bg=COLORS["bg"])
         self.notebook.add(dashboard_tab, text="Painel")
         self.notebook.add(indicators_tab, text="Indicadores")
         self.notebook.add(derivatives_tab, text="Derivativos")
         self.notebook.add(onchain_tab, text="Rede")
+        self.notebook.add(macro_tab, text="Macro/Ciclo")
         self.notebook.add(news_tab, text="Noticias")
         self.notebook.add(update_tab, text="Atualizacao")
 
@@ -1214,6 +1388,7 @@ class BitcoinMonitorApp(Tk):
         self.build_indicators_tab(indicators_tab)
         self.build_derivatives_tab(derivatives_tab)
         self.build_onchain_tab(onchain_tab)
+        self.build_macro_tab(macro_tab)
         self.build_news_tab(news_tab)
         self.build_update_tab(update_tab)
 
@@ -1407,7 +1582,7 @@ class BitcoinMonitorApp(Tk):
         ).pack(anchor="w")
         period_box = ttk.Combobox(
             header,
-            values=["Semanal", "Mensal"],
+            values=["Diario", "Semanal", "Mensal"],
             textvariable=self.indicator_period,
             state="readonly",
             width=12,
@@ -1673,6 +1848,97 @@ class BitcoinMonitorApp(Tk):
         self.onchain_text = self.make_text(detail_panel, height=22, font=("Consolas", 10))
         self.onchain_text.pack(fill=BOTH, expand=True, pady=(12, 0))
 
+    def build_macro_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="FRED oficial, liquidez e ciclo Bitcoin",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Macro/Ciclo",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+
+        metrics_panel = self.panel(parent)
+        metrics_panel.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        grid = Frame(metrics_panel, bg=COLORS["panel"])
+        grid.pack(fill=X)
+        macro_specs = [
+            ("US 10Y", "us10y"),
+            ("Fed funds", "fed_funds"),
+            ("VIX", "vix"),
+            ("Dollar amplo", "dollar"),
+            ("CPI YoY", "cpi_yoy"),
+            ("M2 YoY", "m2_yoy"),
+            ("Balanco Fed 90D", "fed_balance_90d"),
+            ("Mayer Multiple", "mayer"),
+            ("Pi Cycle dist.", "pi_distance"),
+            ("200W multiple", "ma200w_multiple"),
+            ("Halving", "halving_eta"),
+            ("Emissao anual", "issuance_rate"),
+        ]
+        for idx, (title, key) in enumerate(macro_specs):
+            grid.grid_columnconfigure(idx % 4, weight=1)
+            variable = StringVar(value="--")
+            self.macro_vars[key] = variable
+            self.metric_card(grid, title, variable).grid(
+                row=idx // 4,
+                column=idx % 4,
+                sticky="nsew",
+                padx=(0 if idx % 4 == 0 else 8, 0),
+                pady=(0 if idx < 4 else 8, 0),
+            )
+
+        lower = Frame(parent, bg=COLORS["bg"])
+        lower.grid(row=2, column=0, sticky="nsew")
+        lower.grid_columnconfigure(0, weight=2)
+        lower.grid_columnconfigure(1, weight=1)
+        lower.grid_rowconfigure(0, weight=1)
+
+        chart_panel = self.panel(lower)
+        chart_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        Label(
+            chart_panel,
+            text="Macro normalizado e ciclo BTC",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.macro_canvas = Canvas(
+            chart_panel,
+            height=360,
+            bg="#0f0e0b",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["line_soft"],
+        )
+        self.macro_canvas.pack(fill=BOTH, expand=True, pady=(12, 0))
+        self.macro_canvas.bind("<Configure>", lambda _event: self.draw_macro_chart())
+
+        signal_panel = self.panel(lower)
+        signal_panel.grid(row=0, column=1, sticky="nsew")
+        Label(
+            signal_panel,
+            text="Leitura macro",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.macro_text = self.make_text(signal_panel, height=18, font=("Segoe UI", 9))
+        self.macro_text.pack(fill=BOTH, expand=True, pady=(12, 0))
+
     def build_news_tab(self, parent):
         parent.grid_rowconfigure(1, weight=1)
         parent.grid_columnconfigure(0, weight=1)
@@ -1841,6 +2107,7 @@ class BitcoinMonitorApp(Tk):
             "coingecko_global": (fetch_json, ENDPOINTS["coingecko_global"]),
             "binance_ticker": (fetch_json, ENDPOINTS["binance_ticker"]),
             "candles": (fetch_json, ENDPOINTS["candles"].format(interval=interval)),
+            "daily_candles": (fetch_json, ENDPOINTS["daily_candles"]),
             "weekly_candles": (fetch_json, ENDPOINTS["weekly_candles"]),
             "monthly_candles": (fetch_json, ENDPOINTS["monthly_candles"]),
             "depth": (fetch_json, ENDPOINTS["depth"]),
@@ -1858,8 +2125,10 @@ class BitcoinMonitorApp(Tk):
             "futures_taker_ratio": (fetch_json, ENDPOINTS["futures_taker_ratio"]),
             "deribit_options": (fetch_json, ENDPOINTS["deribit_options"]),
         }
+        for name, (_label, url) in FRED_SERIES.items():
+            jobs[name] = (fetch_fred_series, url)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
             futures = {
                 executor.submit(
                     self.fetch_with_cache,
@@ -1968,11 +2237,16 @@ class BitcoinMonitorApp(Tk):
 
         self.apply_market(payload)
         self.apply_candles(payload.get("candles"))
-        self.apply_indicator_candles(payload.get("weekly_candles"), payload.get("monthly_candles"))
+        self.apply_indicator_candles(
+            payload.get("daily_candles"),
+            payload.get("weekly_candles"),
+            payload.get("monthly_candles"),
+        )
         self.apply_depth(payload.get("depth"))
         self.apply_network(payload)
         self.apply_onchain(payload)
         self.apply_derivatives(payload)
+        self.apply_macro_cycle(payload)
         self.apply_fear_greed(payload.get("fear_greed"))
 
         if not errors:
@@ -2213,7 +2487,9 @@ del "%~f0" > nul 2> nul
         ]
         self.draw_chart()
 
-    def apply_indicator_candles(self, weekly_rows, monthly_rows):
+    def apply_indicator_candles(self, daily_rows, weekly_rows, monthly_rows):
+        if daily_rows:
+            self.indicator_candles["Diario"] = self.parse_candle_rows(daily_rows)
         if weekly_rows:
             self.indicator_candles["Semanal"] = self.parse_candle_rows(weekly_rows)
         if monthly_rows:
@@ -2575,6 +2851,209 @@ del "%~f0" > nul 2> nul
             canvas.create_line(left, neutral_y, width - right, neutral_y, fill="#3b372d", dash=(4, 4))
 
         canvas.create_text(left, height - 18, text="30 dias", fill=COLORS["muted"], anchor="w")
+
+    def apply_macro_cycle(self, payload):
+        if not self.macro_vars:
+            return
+
+        fred = {name: payload.get(name) or [] for name in FRED_SERIES}
+        cycle = calculate_cycle_metrics(
+            self.indicator_candles.get("Diario", []),
+            self.indicator_candles.get("Semanal", []),
+        )
+        supply = calculate_supply(payload.get("tip_height"))
+
+        _date_10y, us10y = latest_fred_value(fred["fred_10y"])
+        _date_fed, fed_funds = latest_fred_value(fred["fred_fed_funds"])
+        _date_vix, vix = latest_fred_value(fred["fred_vix"])
+        _date_dollar, dollar = latest_fred_value(fred["fred_dollar"])
+        cpi_yoy = fred_change(fred["fred_cpi"], 365)
+        m2_yoy = fred_change(fred["fred_m2"], 365)
+        fed_balance_90d = fred_change(fred["fred_fed_balance"], 90)
+        dollar_30d = fred_change(fred["fred_dollar"], 30)
+        us10y_30d = fred_change(fred["fred_10y"], 30, absolute=True)
+        vix_30d = fred_change(fred["fred_vix"], 30)
+
+        self.macro_vars["us10y"].set(f"{format_number(us10y, 2)}% | 30D {format_number(us10y_30d, 2)} p.p.")
+        self.macro_vars["fed_funds"].set(f"{format_number(fed_funds, 2)}%")
+        self.macro_vars["vix"].set(f"{format_number(vix, 2)} | 30D {format_percent(vix_30d)}")
+        self.macro_vars["dollar"].set(f"{format_number(dollar, 2)} | 30D {format_percent(dollar_30d)}")
+        self.macro_vars["cpi_yoy"].set(format_percent(cpi_yoy))
+        self.macro_vars["m2_yoy"].set(format_percent(m2_yoy))
+        self.macro_vars["fed_balance_90d"].set(format_percent(fed_balance_90d))
+        self.macro_vars["mayer"].set(format_number(cycle.get("mayer_multiple"), 2))
+        self.macro_vars["pi_distance"].set(format_percent(cycle.get("pi_distance")))
+        self.macro_vars["ma200w_multiple"].set(format_number(cycle.get("ma200w_multiple"), 2))
+        if supply:
+            self.macro_vars["halving_eta"].set(
+                f"{format_number(supply.get('halving_days'), 0)} dias | bloco {format_number(supply.get('next_halving'), 0)}"
+            )
+            self.macro_vars["issuance_rate"].set(
+                f"{format_percent(supply.get('issuance_rate'))} | {format_btc(supply.get('annual_issuance'))}/ano"
+            )
+        else:
+            self.macro_vars["halving_eta"].set("--")
+            self.macro_vars["issuance_rate"].set("--")
+
+        lines = self.build_macro_signals(
+            us10y,
+            us10y_30d,
+            vix,
+            vix_30d,
+            dollar_30d,
+            cpi_yoy,
+            m2_yoy,
+            fed_balance_90d,
+            cycle,
+            supply,
+        )
+        self.write_text_widget(self.macro_text, lines, prefix="- ")
+        self.macro_chart_state = {
+            "fred": fred,
+            "cycle": cycle,
+        }
+        self.draw_macro_chart()
+
+    def build_macro_signals(
+        self,
+        us10y,
+        us10y_30d,
+        vix,
+        vix_30d,
+        dollar_30d,
+        cpi_yoy,
+        m2_yoy,
+        fed_balance_90d,
+        cycle,
+        supply,
+    ):
+        lines = ["Fontes macro oficiais do Federal Reserve/FRED."]
+        if us10y is not None and us10y_30d is not None:
+            if us10y_30d > 0.25:
+                lines.append("Juro de 10 anos subiu forte em 30D; vento macro mais duro para risco.")
+            elif us10y_30d < -0.25:
+                lines.append("Juro de 10 anos caiu em 30D; alivio macro para ativos de risco.")
+            else:
+                lines.append("Juro de 10 anos sem choque relevante em 30D.")
+        if vix is not None:
+            if vix >= 25:
+                lines.append("VIX elevado: mercado global em modo defensivo.")
+            elif vix <= 15:
+                lines.append("VIX baixo: apetite por risco mais confortavel.")
+        if vix_30d is not None and vix_30d > 20:
+            lines.append("VIX acelerou em 30D; risco de volatilidade de curto prazo.")
+        if dollar_30d is not None:
+            if dollar_30d > 2:
+                lines.append("Dollar amplo em alta de 30D; costuma pressionar liquidez global.")
+            elif dollar_30d < -2:
+                lines.append("Dollar amplo em queda de 30D; costuma aliviar liquidez global.")
+        if cpi_yoy is not None:
+            lines.append(f"CPI YoY em {format_percent(cpi_yoy)}.")
+        if m2_yoy is not None:
+            if m2_yoy > 4:
+                lines.append("M2 YoY em expansao relevante: liquidez monetaria melhora.")
+            elif m2_yoy < 0:
+                lines.append("M2 YoY negativo: liquidez monetaria restritiva.")
+        if fed_balance_90d is not None:
+            if fed_balance_90d > 1:
+                lines.append("Balanco do Fed expandiu em 90D.")
+            elif fed_balance_90d < -1:
+                lines.append("Balanco do Fed contraiu em 90D.")
+
+        mayer = cycle.get("mayer_multiple")
+        if mayer is not None:
+            if mayer >= 2.4:
+                lines.append("Mayer Multiple muito alto: zona historicamente aquecida.")
+            elif mayer <= 0.8:
+                lines.append("Mayer Multiple baixo: preco abaixo da media de 200D.")
+            else:
+                lines.append("Mayer Multiple em faixa intermediaria.")
+        pi_distance = cycle.get("pi_distance")
+        if pi_distance is not None:
+            if pi_distance > -5:
+                lines.append("Pi Cycle perto do gatilho de topo historico.")
+            elif pi_distance < -35:
+                lines.append("Pi Cycle distante do gatilho de topo.")
+        one_year = cycle.get("one_year_return")
+        if one_year is not None:
+            lines.append(f"Retorno BTC 1Y: {format_percent(one_year)}.")
+        volatility = cycle.get("volatility_30d")
+        if volatility is not None:
+            lines.append(f"Volatilidade anualizada 30D: {format_percent(volatility)}.")
+        if supply:
+            lines.append(
+                f"Subsidio atual {format_btc(supply.get('subsidy'))} por bloco; "
+                f"emissao anual {format_percent(supply.get('issuance_rate'))}."
+            )
+            lines.append(
+                f"Proximo halving em cerca de {format_number(supply.get('halving_days'), 0)} dias."
+            )
+        return lines
+
+    def draw_macro_chart(self):
+        canvas = getattr(self, "macro_canvas", None)
+        if not canvas:
+            return
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 20 or height <= 20:
+            return
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, width, height, fill="#0f0e0b", outline="")
+
+        state = self.macro_chart_state
+        fred = state.get("fred") or {}
+        series_specs = [
+            ("Dollar", fred.get("fred_dollar") or [], COLORS["orange"]),
+            ("US10Y", fred.get("fred_10y") or [], COLORS["cyan"]),
+            ("VIX", fred.get("fred_vix") or [], "#ff9188"),
+        ]
+        left, right, top, bottom = 54, 18, 22, 34
+        plot_w = width - left - right
+        plot_h = height - top - bottom
+        for idx in range(5):
+            y = top + (plot_h / 4) * idx
+            canvas.create_line(left, y, width - right, y, fill="#27231b")
+            canvas.create_text(8, y, text=f"{100 - idx * 25}", fill=COLORS["dim"], anchor="w", font=("Segoe UI", 8))
+
+        drew = False
+        for label, rows, color in series_specs:
+            values = [parse_float(row.get("value")) for row in rows[-180:]]
+            values = [value for value in values if value is not None]
+            if len(values) < 2:
+                continue
+            low = min(values)
+            high = max(values)
+            span = max(high - low, 0.0001)
+            step = plot_w / max(len(values) - 1, 1)
+            points = []
+            for idx, value in enumerate(values):
+                normalized = (value - low) / span
+                x = left + idx * step
+                y = top + (1 - normalized) * plot_h
+                points.extend([x, y])
+            canvas.create_line(points, fill=color, width=2)
+            canvas.create_text(points[-2] + 4, points[-1], text=label, fill=color, anchor="w", font=("Segoe UI", 8))
+            drew = True
+
+        cycle = state.get("cycle") or {}
+        mayer = cycle.get("mayer_multiple")
+        pi_distance = cycle.get("pi_distance")
+        footer = []
+        if mayer is not None:
+            footer.append(f"Mayer {format_number(mayer, 2)}")
+        if pi_distance is not None:
+            footer.append(f"Pi {format_percent(pi_distance)}")
+        if footer:
+            canvas.create_text(left, height - 16, text=" | ".join(footer), fill=COLORS["muted"], anchor="w")
+        if not drew:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="Aguardando dados macro...",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 12, "bold"),
+            )
 
     def apply_fear_greed(self, payload):
         if not payload:

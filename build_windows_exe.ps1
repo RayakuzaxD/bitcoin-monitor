@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
-$version = "0.3.0"
+$version = "0.4.0"
 $tag = "v$version"
 $buildDist = Join-Path $PSScriptRoot "dist-build"
 
@@ -33,10 +33,10 @@ $manifest = [ordered]@{
   download_url = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/$tag/BitcoinMonitor.exe"
   sha256 = $sha
   notes = @(
-    "Cache local em SQLite para reduzir falhas e rate limit.",
-    "Novas abas de Rede e Derivativos com mempool blocks, funding, open interest, long/short e opcoes Deribit.",
-    "Indicadores avancados no grafico: EMA, Keltner, Donchian, Ichimoku, ATR, ADX, Stoch RSI, MFI, OBV e VWMA.",
-    "Noticias com mais fontes, classificacao por tema e impacto."
+    "Nova aba Macro/Ciclo com dados oficiais do FRED.",
+    "Metricas de ciclo Bitcoin: Mayer Multiple, Pi Cycle, 200W multiple, volatilidade 30D e retorno 1Y.",
+    "Metricas nativas de halving, subsidio, supply aproximado e emissao anual.",
+    "Indicadores agora tambem suportam periodo diario alem de semanal e mensal."
   )
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 4
