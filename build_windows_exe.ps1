@@ -21,7 +21,9 @@ $manifest = [ordered]@{
     "Base de auto-update via GitHub Releases."
   )
 }
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path (Join-Path $releaseDir "update_manifest.json")
+$manifestJson = $manifest | ConvertTo-Json -Depth 4
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $releaseDir "update_manifest.json"), $manifestJson, $utf8NoBom)
 
 Write-Host ""
 Write-Host "Executavel gerado em: $exePath"
