@@ -52,7 +52,7 @@ O manifesto tem este formato:
 {
   "version": "0.2.0",
   "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.2.0",
-  "download_url": "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/main/release/BitcoinMonitor.exe",
+  "download_url": "https://raw.githubusercontent.com/RayakuzaxD/bitcoin-monitor/refs/heads/main/release/BitcoinMonitor.exe",
   "sha256": "...",
   "notes": ["Notas da versao"]
 }
