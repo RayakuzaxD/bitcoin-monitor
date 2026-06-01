@@ -29,7 +29,7 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "Bitcoin Monitor"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
 PORTFOLIO_FILE = APP_DIR / "portfolio.json"
@@ -98,11 +98,10 @@ INITIAL_SUBSIDY = 50.0
 
 NEWS_FEEDS = [
     ("Cointelegraph BR", "https://cointelegraph.com.br/rss/tag/bitcoin"),
-    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
-    ("Bitcoin Magazine", "https://bitcoinmagazine.com/.rss/full/"),
-    ("Bitcoin Optech", "https://bitcoinops.org/feed.xml"),
-    ("Decrypt", "https://decrypt.co/feed"),
-    ("CryptoSlate", "https://cryptoslate.com/feed/"),
+    ("Livecoins", "https://livecoins.com.br/feed/"),
+    ("Portal do Bitcoin", "https://portaldobitcoin.uol.com.br/feed/"),
+    ("CriptoFacil", "https://www.criptofacil.com/feed/"),
+    ("BeInCrypto Brasil", "https://br.beincrypto.com/feed/"),
 ]
 
 CACHE_TTLS = {
@@ -2127,14 +2126,14 @@ class BitcoinMonitorApp(Tk):
         title_frame.pack(side=LEFT, fill=X, expand=True)
         Label(
             title_frame,
-            text="Noticias atualizadas",
+            text="Noticias em portugues brasileiro",
             bg=COLORS["panel"],
             fg=COLORS["muted"],
             font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w")
         Label(
             title_frame,
-            text="Bitcoin em fontes RSS publicas",
+            text="Bitcoin em fontes brasileiras",
             bg=COLORS["panel"],
             fg=COLORS["text"],
             font=("Segoe UI", 16, "bold"),
@@ -2330,7 +2329,7 @@ class BitcoinMonitorApp(Tk):
     def fetch_news_worker(self):
         items = []
         errors = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             futures = {
                 executor.submit(fetch_text, url, 12): source
                 for source, url in NEWS_FEEDS

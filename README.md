@@ -32,7 +32,7 @@ run_windows_app.bat
 - Aba Macro/Ciclo com dados oficiais do FRED, Mayer Multiple, Pi Cycle, 200W multiple, halving, subsidy, supply e emissao anual.
 - Aba Carteira/Risco com quantidade de BTC, preco medio, P/L, alocacao, DCA, VaR 30D aproximado e persistencia local.
 - Aba Relatorio com resumo 7D/30D de mercado, tecnica, derivativos, rede, macro, carteira, noticias e pontos de atencao.
-- Aba Noticias com RSS publico, deduplicacao, classificacao por tema e leitura de impacto.
+- Aba Noticias com RSS em portugues brasileiro, deduplicacao, classificacao por tema e leitura de impacto.
 - Alertas locais para preco, variacao, fees, mempool, funding, open interest e long/short.
 - Cache local em SQLite para reduzir rate limit e manter dados recentes quando alguma fonte publica falhar.
 - Auto-update por manifesto versionado, com validacao SHA-256 antes de instalar.
@@ -46,7 +46,7 @@ run_windows_app.bat
 - mempool.space API: fees, mempool, blocos projetados, altura do bloco e ajuste de dificuldade.
 - Federal Reserve/FRED: US 10Y, Fed Funds, VIX, dollar amplo, CPI, M2 e balanco do Fed.
 - Alternative.me: Fear & Greed Index.
-- RSS: Cointelegraph BR, CoinDesk, Bitcoin Magazine, Bitcoin Optech, Decrypt e CryptoSlate.
+- RSS em portugues brasileiro: Cointelegraph BR, Livecoins, Portal do Bitcoin, CriptoFacil e BeInCrypto Brasil.
 
 ## Gerar release
 
@@ -62,7 +62,7 @@ Esse comando gera:
 dist\BitcoinMonitor.exe
 release\BitcoinMonitor.exe
 release\update_manifest.json
-BitcoinMonitor-v0.5.0-release.zip
+BitcoinMonitor-v0.5.1-release.zip
 ```
 
 ## Auto-update
@@ -77,9 +77,9 @@ O manifesto tem este formato:
 
 ```json
 {
-  "version": "0.5.0",
-  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.5.0",
-  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.5.0/BitcoinMonitor.exe",
+  "version": "0.5.1",
+  "release_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.5.1",
+  "download_url": "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.5.1/BitcoinMonitor.exe",
   "sha256": "...",
   "notes": ["Notas da versao"]
 }
@@ -99,7 +99,7 @@ Para publicar manualmente a proxima versao:
 
 ```powershell
 .\build_windows_exe.ps1
-gh release create v0.5.0 release\BitcoinMonitor.exe BitcoinMonitor-v0.5.0-release.zip release\update_manifest.json --title v0.5.0 --notes-file release\update_manifest.json
+gh release create v0.5.1 release\BitcoinMonitor.exe BitcoinMonitor-v0.5.1-release.zip release\update_manifest.json --title v0.5.1 --notes-file release\update_manifest.json
 ```
 
 ## Problemas comuns
