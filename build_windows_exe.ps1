@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
-$version = "0.5.1"
+$version = "0.6.0"
 $tag = "v$version"
 $buildDist = Join-Path $PSScriptRoot "dist-build"
 $pythonRoot = (& python -c "import sys; print(sys.base_prefix)").Trim()
@@ -49,10 +49,13 @@ $manifest = [ordered]@{
   download_url = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/$tag/BitcoinMonitor.exe"
   sha256 = $sha
   notes = @(
-    "Noticias agora priorizam fontes em portugues brasileiro.",
-    "Fontes da aba Noticias: Cointelegraph BR, Livecoins, Portal do Bitcoin, CriptoFacil e BeInCrypto Brasil.",
-    "Remove fontes RSS em ingles da lista padrao de noticias.",
-    "Mantem Carteira/Risco, Relatorio 7D/30D e correcoes de empacotamento Windows."
+    "Nova aba Resumo com leitura simples de mercado, tecnica, rede, derivativos e MVRV.",
+    "Nova Watchlist preparada para BTC, ETH, SOL e USDT/BRL via CoinGecko com cache.",
+    "Preferencias locais para moeda principal, tema e MVRV manual.",
+    "MVRV Z-Score preparado para JSON, CSV, entrada manual ou API paga futura sem inventar dados.",
+    "Relatorio agora aceita 7D, 30D, 90D e 365D com maxima, minima e drawdown do periodo.",
+    "Alertas ampliados para RSI diario/semanal, Fear & Greed, volatilidade e MVRV.",
+    "Noticias seguem em portugues brasileiro com fontes PT-BR validadas."
   )
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 4

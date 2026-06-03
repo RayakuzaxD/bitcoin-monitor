@@ -29,10 +29,13 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "Bitcoin Monitor"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.0"
 APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "BitcoinMonitor"
 ALERTS_FILE = APP_DIR / "alerts.json"
 PORTFOLIO_FILE = APP_DIR / "portfolio.json"
+SETTINGS_FILE = APP_DIR / "settings.json"
+MVRV_FILE = APP_DIR / "mvrv.json"
+MVRV_CSV_FILE = APP_DIR / "mvrv.csv"
 DB_FILE = APP_DIR / "bitcoin_monitor.db"
 UPDATE_CONFIG_FILE = APP_DIR / "update_config.json"
 DEFAULT_UPDATE_MANIFEST_URL = "https://github.com/RayakuzaxD/bitcoin-monitor/releases/latest/download/update_manifest.json"
@@ -50,6 +53,12 @@ ENDPOINTS = {
         "&sparkline=false"
     ),
     "coingecko_global": "https://api.coingecko.com/api/v3/global",
+    "coingecko_watchlist": (
+        "https://api.coingecko.com/api/v3/simple/price"
+        "?ids=bitcoin,ethereum,solana,tether"
+        "&vs_currencies=usd,brl"
+        "&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true"
+    ),
     "binance_ticker": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
     "candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={interval}&limit=180",
     "daily_candles": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1000",
@@ -108,6 +117,7 @@ CACHE_TTLS = {
     "coingecko": 35,
     "coingecko_markets": 90,
     "coingecko_global": 300,
+    "coingecko_watchlist": 90,
     "binance_ticker": 15,
     "candles": 30,
     "daily_candles": 3_600,
@@ -145,7 +155,7 @@ NEWS_CATEGORIES = [
     ("Derivativos", ["funding", "futures", "options", "open interest", "liquidation", "derivatives"]),
 ]
 
-COLORS = {
+DARK_COLORS = {
     "bg": "#100f0c",
     "panel": "#191713",
     "panel_2": "#211e18",
@@ -158,7 +168,46 @@ COLORS = {
     "green": "#35c46b",
     "red": "#ee5d50",
     "cyan": "#3ccfcf",
+    "chart_bg": "#0f0e0b",
+    "chart_grid": "#27231b",
+    "chart_axis": "#3b372d",
+    "volume_bar": "#5c5446",
 }
+
+LIGHT_COLORS = {
+    "bg": "#f4f0e8",
+    "panel": "#ffffff",
+    "panel_2": "#f1ede5",
+    "line": "#d9d0c2",
+    "line_soft": "#e6ded2",
+    "text": "#1f1a13",
+    "muted": "#665d50",
+    "dim": "#8b8174",
+    "orange": "#d97706",
+    "green": "#15803d",
+    "red": "#dc2626",
+    "cyan": "#0e7490",
+    "chart_bg": "#ffffff",
+    "chart_grid": "#e8dfd3",
+    "chart_axis": "#d6cab8",
+    "volume_bar": "#c9bca8",
+}
+
+COLORS = DARK_COLORS.copy()
+
+DEFAULT_SETTINGS = {
+    "theme": "Escuro",
+    "primary_currency": "USD",
+    "mvrv_manual_z_score": "",
+    "mvrv_source": "",
+}
+
+WATCHLIST_ASSETS = [
+    ("BTC", "Bitcoin", "bitcoin"),
+    ("ETH", "Ethereum", "ethereum"),
+    ("SOL", "Solana", "solana"),
+    ("USDT/BRL", "Tether em reais", "tether"),
+]
 
 INTERVALS = {
     "1m": "1 minuto",
@@ -177,7 +226,29 @@ METRICS = {
     "Funding %": "funding_rate_pct",
     "Open interest USD": "open_interest_usd",
     "Long/Short ratio": "long_short_ratio",
+    "RSI diario": "rsi_daily",
+    "RSI semanal": "rsi_weekly",
+    "Fear & Greed": "fear_greed_value",
+    "Volatilidade 30D %": "volatility_30d",
+    "MVRV Z-Score": "mvrv_z_score",
 }
+
+
+def apply_theme_palette(theme):
+    palette = LIGHT_COLORS if str(theme).lower().startswith("claro") else DARK_COLORS
+    COLORS.clear()
+    COLORS.update(palette)
+
+
+def normalize_settings(data):
+    settings = DEFAULT_SETTINGS.copy()
+    if isinstance(data, dict):
+        settings.update({key: value for key, value in data.items() if key in settings})
+    if settings.get("primary_currency") not in ("USD", "BRL"):
+        settings["primary_currency"] = "USD"
+    if settings.get("theme") not in ("Escuro", "Claro"):
+        settings["theme"] = "Escuro"
+    return settings
 
 
 def fetch_json(url, timeout=10):
@@ -506,6 +577,12 @@ def metric_value_label(metric, value):
     if metric == "open_interest_usd":
         return format_compact_currency(value, "USD")
     if metric == "long_short_ratio":
+        return format_number(value, 2)
+    if metric in ("rsi_daily", "rsi_weekly", "fear_greed_value"):
+        return format_number(value, 1)
+    if metric == "volatility_30d":
+        return format_percent(value)
+    if metric == "mvrv_z_score":
         return format_number(value, 2)
     return format_number(value, 2)
 
@@ -1092,6 +1169,8 @@ class BitcoinMonitorApp(Tk):
         self.title(APP_NAME)
         self.geometry("1280x820")
         self.minsize(1020, 680)
+        self.settings = self.load_settings()
+        apply_theme_palette(self.settings.get("theme"))
         self.configure(bg=COLORS["bg"])
 
         self.store = LocalStore(DB_FILE)
@@ -1100,6 +1179,10 @@ class BitcoinMonitorApp(Tk):
         self.fetching = False
         self.interval = StringVar(value="1m")
         self.indicator_period = StringVar(value="Semanal")
+        self.primary_currency = StringVar(value=self.settings.get("primary_currency", "USD"))
+        self.theme_choice = StringVar(value=self.settings.get("theme", "Escuro"))
+        self.mvrv_manual_value = StringVar(value=str(self.settings.get("mvrv_manual_z_score") or ""))
+        self.mvrv_source_value = StringVar(value=str(self.settings.get("mvrv_source") or ""))
         self.indicator_layers = {
             "ma50": BooleanVar(value=True),
             "ma100": BooleanVar(value=True),
@@ -1135,6 +1218,9 @@ class BitcoinMonitorApp(Tk):
         self.derivative_vars = {}
         self.onchain_vars = {}
         self.macro_vars = {}
+        self.summary_vars = {}
+        self.watchlist_vars = {}
+        self.mvrv_vars = {}
         self.cycle_vars = {}
         self.portfolio_inputs = {}
         self.portfolio_vars = {}
@@ -1243,22 +1329,28 @@ class BitcoinMonitorApp(Tk):
         self.notebook.pack(fill=BOTH, expand=True)
 
         dashboard_tab = Frame(self.notebook, bg=COLORS["bg"])
+        quick_summary_tab = Frame(self.notebook, bg=COLORS["bg"])
         indicators_tab = Frame(self.notebook, bg=COLORS["bg"])
         derivatives_tab = Frame(self.notebook, bg=COLORS["bg"])
         onchain_tab = Frame(self.notebook, bg=COLORS["bg"])
+        watchlist_tab = Frame(self.notebook, bg=COLORS["bg"])
         macro_tab = Frame(self.notebook, bg=COLORS["bg"])
         portfolio_tab = Frame(self.notebook, bg=COLORS["bg"])
         report_tab = Frame(self.notebook, bg=COLORS["bg"])
         news_tab = Frame(self.notebook, bg=COLORS["bg"])
+        settings_tab = Frame(self.notebook, bg=COLORS["bg"])
         update_tab = Frame(self.notebook, bg=COLORS["bg"])
         self.notebook.add(dashboard_tab, text="Painel")
+        self.notebook.add(quick_summary_tab, text="Resumo")
         self.notebook.add(indicators_tab, text="Indicadores")
         self.notebook.add(derivatives_tab, text="Derivativos")
         self.notebook.add(onchain_tab, text="Rede")
+        self.notebook.add(watchlist_tab, text="Watchlist")
         self.notebook.add(macro_tab, text="Macro/Ciclo")
         self.notebook.add(portfolio_tab, text="Carteira")
         self.notebook.add(report_tab, text="Relatorio")
         self.notebook.add(news_tab, text="Noticias")
+        self.notebook.add(settings_tab, text="Preferencias")
         self.notebook.add(update_tab, text="Atualizacao")
 
         summary = Frame(dashboard_tab, bg=COLORS["bg"])
@@ -1273,10 +1365,11 @@ class BitcoinMonitorApp(Tk):
 
         self.price_usd_var = StringVar(value="US$ --")
         self.price_brl_var = StringVar(value="R$ --")
+        self.price_pair_var = StringVar(value=f"BTC / {self.primary_currency.get()}")
         self.change_var = StringVar(value="--")
         Label(
             price_panel,
-            text="BTC / USD",
+            textvariable=self.price_pair_var,
             bg=COLORS["panel"],
             fg=COLORS["muted"],
             font=("Segoe UI", 9, "bold"),
@@ -1312,6 +1405,7 @@ class BitcoinMonitorApp(Tk):
         cards.pack(fill=X, pady=(18, 0))
         for idx, (title, key) in enumerate(
             [
+                ("Variacao 1h", "change_1h"),
                 ("Volume 24h", "volume_24h"),
                 ("Market cap", "market_cap"),
                 ("Dominancia BTC", "btc_dominance"),
@@ -1390,7 +1484,7 @@ class BitcoinMonitorApp(Tk):
         self.chart_canvas = Canvas(
             chart_panel,
             height=310,
-            bg="#0f0e0b",
+            bg=COLORS["chart_bg"],
             bd=0,
             highlightthickness=1,
             highlightbackground=COLORS["line_soft"],
@@ -1407,13 +1501,16 @@ class BitcoinMonitorApp(Tk):
         self.build_network(lower).grid(row=0, column=1, sticky="nsew", padx=(0, 10))
         self.build_alerts(lower).grid(row=0, column=2, sticky="nsew", padx=(0, 10))
         self.build_events(lower).grid(row=0, column=3, sticky="nsew")
+        self.build_quick_summary_tab(quick_summary_tab)
         self.build_indicators_tab(indicators_tab)
         self.build_derivatives_tab(derivatives_tab)
         self.build_onchain_tab(onchain_tab)
+        self.build_watchlist_tab(watchlist_tab)
         self.build_macro_tab(macro_tab)
         self.build_portfolio_tab(portfolio_tab)
         self.build_report_tab(report_tab)
         self.build_news_tab(news_tab)
+        self.build_settings_tab(settings_tab)
         self.build_update_tab(update_tab)
 
     def panel(self, parent):
@@ -1581,6 +1678,247 @@ class BitcoinMonitorApp(Tk):
         self.events_text.pack(fill=BOTH, expand=True, pady=(12, 0))
         return panel
 
+    def build_quick_summary_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Leitura simples, sem recomendacao financeira",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Resumo rapido do mercado",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        self.summary_updated_var = StringVar(value="Aguardando dados")
+        Label(
+            header,
+            textvariable=self.summary_updated_var,
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10, "bold"),
+        ).pack(side=RIGHT)
+
+        cards_panel = self.panel(parent)
+        cards_panel.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        grid = Frame(cards_panel, bg=COLORS["panel"])
+        grid.pack(fill=X)
+        summary_specs = [
+            ("Tendencia", "trend"),
+            ("Sentimento", "sentiment"),
+            ("Rede", "network"),
+            ("Volatilidade", "volatility"),
+            ("Derivativos", "derivatives"),
+            ("MVRV", "mvrv"),
+        ]
+        for idx, (title, key) in enumerate(summary_specs):
+            grid.grid_columnconfigure(idx % 3, weight=1)
+            self.summary_vars[key] = StringVar(value="--")
+            self.metric_card(grid, title, self.summary_vars[key]).grid(
+                row=idx // 3,
+                column=idx % 3,
+                sticky="nsew",
+                padx=(0 if idx % 3 == 0 else 8, 0),
+                pady=(0 if idx < 3 else 8, 0),
+            )
+
+        detail_panel = self.panel(parent)
+        detail_panel.grid(row=2, column=0, sticky="nsew")
+        Label(
+            detail_panel,
+            text="Leitura consolidada",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).pack(anchor="w")
+        self.summary_text = self.make_text(detail_panel, height=22, font=("Segoe UI", 10))
+        self.summary_text.pack(fill=BOTH, expand=True, pady=(12, 0))
+        self.apply_quick_summary()
+
+    def build_watchlist_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(1, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Ativos preparados para acompanhar junto do BTC",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Watchlist",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        self.watchlist_status_var = StringVar(value="Aguardando dados")
+        Label(
+            header,
+            textvariable=self.watchlist_status_var,
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10, "bold"),
+        ).pack(side=RIGHT, padx=(10, 0))
+
+        content = self.panel(parent)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.grid_columnconfigure(0, weight=1)
+        for row_index, (symbol, name, _coingecko_id) in enumerate(WATCHLIST_ASSETS):
+            asset_panel = Frame(
+                content,
+                bg=COLORS["panel_2"],
+                highlightthickness=1,
+                highlightbackground=COLORS["line_soft"],
+                padx=12,
+                pady=10,
+            )
+            asset_panel.grid(row=row_index, column=0, sticky="ew", pady=(0 if row_index == 0 else 8, 0))
+            asset_panel.grid_columnconfigure(1, weight=1)
+            Label(
+                asset_panel,
+                text=symbol,
+                bg=COLORS["panel_2"],
+                fg=COLORS["orange"],
+                font=("Segoe UI", 15, "bold"),
+                width=9,
+                anchor="w",
+            ).grid(row=0, column=0, rowspan=2, sticky="nsw", padx=(0, 12))
+            Label(
+                asset_panel,
+                text=name,
+                bg=COLORS["panel_2"],
+                fg=COLORS["muted"],
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=0, column=1, sticky="w")
+            metrics_row = Frame(asset_panel, bg=COLORS["panel_2"])
+            metrics_row.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+            values = {}
+            for idx, (label, key) in enumerate(
+                [
+                    ("USD", "usd"),
+                    ("BRL", "brl"),
+                    ("24h", "change_24h"),
+                    ("Volume", "volume"),
+                    ("Market cap", "market_cap"),
+                ]
+            ):
+                metrics_row.grid_columnconfigure(idx, weight=1)
+                values[key] = StringVar(value="--")
+                self.metric_card(metrics_row, label, values[key]).grid(
+                    row=0,
+                    column=idx,
+                    sticky="nsew",
+                    padx=(0 if idx == 0 else 8, 0),
+                )
+            self.watchlist_vars[symbol] = values
+
+    def build_settings_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(1, weight=1)
+
+        header = self.panel(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(8, 12))
+        title_frame = Frame(header, bg=COLORS["panel"])
+        title_frame.pack(side=LEFT, fill=X, expand=True)
+        Label(
+            title_frame,
+            text="Preferencias locais e dados manuais confiaveis",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        Label(
+            title_frame,
+            text="Preferencias",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+        self.make_button(header, "Salvar", self.save_settings_from_inputs, primary=True).pack(side=RIGHT)
+
+        panel = self.panel(parent)
+        panel.grid(row=1, column=0, sticky="nsew")
+        panel.grid_columnconfigure(0, weight=1)
+        panel.grid_columnconfigure(1, weight=1)
+
+        form = Frame(panel, bg=COLORS["panel"])
+        form.grid(row=0, column=0, sticky="new", padx=(0, 14))
+        for idx, (label, widget) in enumerate(
+            [
+                (
+                    "Moeda principal",
+                    ttk.Combobox(
+                        form,
+                        values=["USD", "BRL"],
+                        textvariable=self.primary_currency,
+                        state="readonly",
+                        style="Dark.TCombobox",
+                    ),
+                ),
+                (
+                    "Tema",
+                    ttk.Combobox(
+                        form,
+                        values=["Escuro", "Claro"],
+                        textvariable=self.theme_choice,
+                        state="readonly",
+                        style="Dark.TCombobox",
+                    ),
+                ),
+                ("MVRV Z-Score manual", ttk.Entry(form, textvariable=self.mvrv_manual_value)),
+                ("Fonte MVRV", ttk.Entry(form, textvariable=self.mvrv_source_value)),
+            ]
+        ):
+            Label(
+                form,
+                text=label,
+                bg=COLORS["panel"],
+                fg=COLORS["muted"],
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=idx * 2, column=0, sticky="w", pady=(0 if idx == 0 else 10, 4))
+            widget.grid(row=idx * 2 + 1, column=0, sticky="ew")
+
+        detail = Frame(panel, bg=COLORS["panel"])
+        detail.grid(row=0, column=1, sticky="nsew")
+        detail.grid_columnconfigure(0, weight=1)
+        Label(
+            detail,
+            text="MVRV Z-Score",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self.settings_status_var = StringVar(value="Preferencias carregadas")
+        Label(
+            detail,
+            textvariable=self.settings_status_var,
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10, "bold"),
+            wraplength=500,
+            justify=LEFT,
+        ).grid(row=1, column=0, sticky="ew", pady=(10, 12))
+        self.mvrv_text = self.make_text(detail, height=14, font=("Segoe UI", 9))
+        self.mvrv_text.grid(row=2, column=0, sticky="nsew")
+        detail.grid_rowconfigure(2, weight=1)
+        self.apply_mvrv()
+
     def build_indicators_tab(self, parent):
         parent.grid_columnconfigure(0, weight=2)
         parent.grid_columnconfigure(1, weight=1)
@@ -1657,7 +1995,7 @@ class BitcoinMonitorApp(Tk):
         self.indicator_canvas = Canvas(
             chart_panel,
             height=420,
-            bg="#0f0e0b",
+            bg=COLORS["chart_bg"],
             bd=0,
             highlightthickness=1,
             highlightbackground=COLORS["line_soft"],
@@ -1788,7 +2126,7 @@ class BitcoinMonitorApp(Tk):
         self.derivatives_canvas = Canvas(
             chart_panel,
             height=360,
-            bg="#0f0e0b",
+            bg=COLORS["chart_bg"],
             bd=0,
             highlightthickness=1,
             highlightbackground=COLORS["line_soft"],
@@ -1910,6 +2248,8 @@ class BitcoinMonitorApp(Tk):
             ("Mayer Multiple", "mayer"),
             ("Pi Cycle dist.", "pi_distance"),
             ("200W multiple", "ma200w_multiple"),
+            ("MVRV Z-Score", "mvrv_z_score"),
+            ("Fonte MVRV", "mvrv_source"),
             ("Halving", "halving_eta"),
             ("Emissao anual", "issuance_rate"),
         ]
@@ -1943,7 +2283,7 @@ class BitcoinMonitorApp(Tk):
         self.macro_canvas = Canvas(
             chart_panel,
             height=360,
-            bg="#0f0e0b",
+            bg=COLORS["chart_bg"],
             bd=0,
             highlightthickness=1,
             highlightbackground=COLORS["line_soft"],
@@ -2092,14 +2432,14 @@ class BitcoinMonitorApp(Tk):
         ).pack(anchor="w")
         Label(
             title_frame,
-            text="Relatorio 7D/30D",
+            text="Relatorio 7D/30D/90D/365D",
             bg=COLORS["panel"],
             fg=COLORS["text"],
             font=("Segoe UI", 16, "bold"),
         ).pack(anchor="w")
         period_box = ttk.Combobox(
             header,
-            values=["7D", "30D"],
+            values=["7D", "30D", "90D", "365D"],
             textvariable=self.report_period,
             state="readonly",
             width=8,
@@ -2222,7 +2562,7 @@ class BitcoinMonitorApp(Tk):
         text = tk_text = __import__("tkinter").Text(
             parent,
             height=height,
-            bg="#11100d",
+            bg=COLORS["panel_2"],
             fg=COLORS["text"],
             insertbackground=COLORS["text"],
             relief="flat",
@@ -2282,6 +2622,7 @@ class BitcoinMonitorApp(Tk):
             "coingecko": (fetch_json, ENDPOINTS["coingecko"]),
             "coingecko_markets": (fetch_json, ENDPOINTS["coingecko_markets"]),
             "coingecko_global": (fetch_json, ENDPOINTS["coingecko_global"]),
+            "coingecko_watchlist": (fetch_json, ENDPOINTS["coingecko_watchlist"]),
             "binance_ticker": (fetch_json, ENDPOINTS["binance_ticker"]),
             "candles": (fetch_json, ENDPOINTS["candles"].format(interval=interval)),
             "daily_candles": (fetch_json, ENDPOINTS["daily_candles"]),
@@ -2413,6 +2754,7 @@ class BitcoinMonitorApp(Tk):
         errors = payload.get("errors", [])
 
         self.apply_market(payload)
+        self.apply_watchlist(payload.get("coingecko_watchlist"))
         self.apply_candles(payload.get("candles"))
         self.apply_indicator_candles(
             payload.get("daily_candles"),
@@ -2425,7 +2767,9 @@ class BitcoinMonitorApp(Tk):
         self.apply_derivatives(payload)
         self.apply_macro_cycle(payload)
         self.apply_fear_greed(payload.get("fear_greed"))
+        self.apply_mvrv()
         self.apply_portfolio()
+        self.apply_quick_summary()
         self.render_report()
 
         if not errors:
@@ -2639,17 +2983,46 @@ del "%~f0" > nul 2> nul
             }
         )
 
-        self.price_usd_var.set(format_currency(price_usd, "USD"))
-        self.price_brl_var.set(format_currency(price_brl, "BRL", 0))
+        primary_currency = self.primary_currency.get() if hasattr(self, "primary_currency") else "USD"
+        self.price_pair_var.set(f"BTC / {primary_currency}")
+        if primary_currency == "BRL":
+            self.price_usd_var.set(format_currency(price_brl, "BRL", 0))
+            self.price_brl_var.set(format_currency(price_usd, "USD"))
+        else:
+            self.price_usd_var.set(format_currency(price_usd, "USD"))
+            self.price_brl_var.set(format_currency(price_brl, "BRL", 0))
         self.change_var.set(format_percent(change))
         self.change_label.configure(
             fg="#7af09c" if change and change > 0 else "#ff9188" if change and change < 0 else COLORS["muted"]
         )
+        self.value_vars["change_1h"].set(format_percent(change_1h))
         self.value_vars["volume_24h"].set(format_compact_currency(volume, "USD"))
         self.value_vars["market_cap"].set(format_compact_currency(market_cap, "USD"))
         self.value_vars["btc_dominance"].set(f"{format_number(dominance, 1)}%")
         self.value_vars["change_7d"].set(format_percent(change_7d))
         self.value_vars["change_30d"].set(format_percent(change_30d))
+
+    def apply_watchlist(self, payload):
+        if not self.watchlist_vars:
+            return
+        data = payload if isinstance(payload, dict) else {}
+        for symbol, _name, coingecko_id in WATCHLIST_ASSETS:
+            values = self.watchlist_vars.get(symbol)
+            if not values:
+                continue
+            item = data.get(coingecko_id) or {}
+            usd = self.to_float(item.get("usd"))
+            brl = self.to_float(item.get("brl"))
+            change = self.to_float(item.get("usd_24h_change"))
+            volume = self.to_float(item.get("usd_24h_vol"))
+            market_cap = self.to_float(item.get("usd_market_cap"))
+            values["usd"].set(format_currency(usd, "USD"))
+            values["brl"].set(format_currency(brl, "BRL", 2 if symbol == "USDT/BRL" else 0))
+            values["change_24h"].set(format_percent(change))
+            values["volume"].set(format_compact_currency(volume, "USD"))
+            values["market_cap"].set(format_compact_currency(market_cap, "USD"))
+        if hasattr(self, "watchlist_status_var"):
+            self.watchlist_status_var.set("Watchlist sincronizada" if data else "Watchlist sem dados recentes")
 
     def apply_candles(self, rows):
         if not rows:
@@ -2674,6 +3047,12 @@ del "%~f0" > nul 2> nul
             self.indicator_candles["Semanal"] = self.parse_candle_rows(weekly_rows)
         if monthly_rows:
             self.indicator_candles["Mensal"] = self.parse_candle_rows(monthly_rows)
+        daily_snapshot = calculate_indicators(self.indicator_candles.get("Diario", []))
+        weekly_snapshot = calculate_indicators(self.indicator_candles.get("Semanal", []))
+        self.metrics["rsi_daily"] = daily_snapshot.get("rsi14")
+        self.metrics["rsi_weekly"] = weekly_snapshot.get("rsi14")
+        self.metrics["daily_distance_ma200"] = daily_snapshot.get("distance_ma200")
+        self.metrics["weekly_distance_ma200"] = weekly_snapshot.get("distance_ma200")
         self.render_indicators()
 
     def apply_depth(self, depth):
@@ -2962,7 +3341,7 @@ del "%~f0" > nul 2> nul
         if width <= 20 or height <= 20:
             return
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill="#0f0e0b", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["chart_bg"], outline="")
 
         state = self.derivatives_chart_state
         oi_rows = state.get("oi_hist") or []
@@ -2994,7 +3373,7 @@ del "%~f0" > nul 2> nul
 
         for idx in range(5):
             y = top + (plot_h / 4) * idx
-            canvas.create_line(left, y, width - right, y, fill="#27231b")
+            canvas.create_line(left, y, width - right, y, fill=COLORS["chart_grid"])
             value = max_oi - (span_oi / 4) * idx
             canvas.create_text(
                 8,
@@ -3035,7 +3414,7 @@ del "%~f0" > nul 2> nul
                     font=("Segoe UI", 8),
                 )
             neutral_y = top + (max_ratio - 1) / span_ratio * plot_h
-            canvas.create_line(left, neutral_y, width - right, neutral_y, fill="#3b372d", dash=(4, 4))
+            canvas.create_line(left, neutral_y, width - right, neutral_y, fill=COLORS["chart_axis"], dash=(4, 4))
 
         canvas.create_text(left, height - 18, text="30 dias", fill=COLORS["muted"], anchor="w")
 
@@ -3208,7 +3587,7 @@ del "%~f0" > nul 2> nul
         if width <= 20 or height <= 20:
             return
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill="#0f0e0b", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["chart_bg"], outline="")
 
         state = self.macro_chart_state
         fred = state.get("fred") or {}
@@ -3222,7 +3601,7 @@ del "%~f0" > nul 2> nul
         plot_h = height - top - bottom
         for idx in range(5):
             y = top + (plot_h / 4) * idx
-            canvas.create_line(left, y, width - right, y, fill="#27231b")
+            canvas.create_line(left, y, width - right, y, fill=COLORS["chart_grid"])
             canvas.create_text(8, y, text=f"{100 - idx * 25}", fill=COLORS["dim"], anchor="w", font=("Segoe UI", 8))
 
         drew = False
@@ -3379,6 +3758,28 @@ del "%~f0" > nul 2> nul
                 lines.append("Mayer Multiple em zona historicamente fria.")
         return lines
 
+    def report_period_days(self, period):
+        return {"7D": 7, "30D": 30, "90D": 90, "365D": 365}.get(period, 30)
+
+    def price_history_summary(self, days):
+        candles = self.indicator_candles.get("Diario", [])
+        if not candles:
+            return {}
+        latest = candles[-1]["close"]
+        previous_index = max(0, len(candles) - days - 1)
+        previous = candles[previous_index]["close"] if len(candles) > 1 else None
+        window = candles[-days:] if len(candles) >= days else candles
+        high = max(item["high"] for item in window) if window else None
+        low = min(item["low"] for item in window) if window else None
+        return {
+            "days": days,
+            "change": percent_distance(latest, previous),
+            "high": high,
+            "low": low,
+            "drawdown": percent_distance(latest, high),
+            "latest": latest,
+        }
+
     def render_report(self):
         if not hasattr(self, "report_text"):
             return
@@ -3386,7 +3787,13 @@ del "%~f0" > nul 2> nul
         self.write_text_widget(self.report_text, lines)
 
     def build_report_lines(self, period):
-        change = self.metrics.get("change_7d" if period == "7D" else "change_30d")
+        history = self.price_history_summary(self.report_period_days(period))
+        if period == "7D":
+            change = self.metrics.get("change_7d") if self.metrics.get("change_7d") is not None else history.get("change")
+        elif period == "30D":
+            change = self.metrics.get("change_30d") if self.metrics.get("change_30d") is not None else history.get("change")
+        else:
+            change = history.get("change")
         daily_snapshot = calculate_indicators(self.indicator_candles.get("Diario", []))
         weekly_snapshot = calculate_indicators(self.indicator_candles.get("Semanal", []))
         lines = [
@@ -3405,6 +3812,12 @@ del "%~f0" > nul 2> nul
             f"- Diario: MM200 {format_currency(daily_snapshot.get('ma200'), 'USD')} | Dist. MM200 {format_percent(daily_snapshot.get('distance_ma200'))}",
             f"- Semanal: MM200 {format_currency(weekly_snapshot.get('ma200'), 'USD')} | Dist. MM200 {format_percent(weekly_snapshot.get('distance_ma200'))}",
             f"- Mayer Multiple: {format_number(self.metrics.get('mayer_multiple'), 2)} | 200W multiple {format_number(self.metrics.get('ma200w_multiple'), 2)}",
+            f"- MVRV Z-Score: {format_number(self.metrics.get('mvrv_z_score'), 2)} | Fonte {self.metrics.get('mvrv_source') or 'indisponivel'}",
+            "",
+            "HISTORICO",
+            f"- Maxima do periodo: {format_currency(history.get('high'), 'USD')}",
+            f"- Minima do periodo: {format_currency(history.get('low'), 'USD')}",
+            f"- Drawdown da maxima do periodo: {format_percent(history.get('drawdown'))}",
             "",
             "DERIVATIVOS",
             f"- Funding: {format_percent(self.metrics.get('funding_rate_pct'))}",
@@ -3466,6 +3879,12 @@ del "%~f0" > nul 2> nul
             flags.append("RSI diario em sobrecompra.")
         if daily_snapshot.get("rsi14") is not None and daily_snapshot["rsi14"] <= 30:
             flags.append("RSI diario em sobrevenda.")
+        if self.metrics.get("fear_greed_value") is not None and self.metrics["fear_greed_value"] <= 25:
+            flags.append("Fear & Greed em medo extremo.")
+        if self.metrics.get("fear_greed_value") is not None and self.metrics["fear_greed_value"] >= 75:
+            flags.append("Fear & Greed em ganancia extrema.")
+        if self.metrics.get("mvrv_z_score") is None:
+            flags.append("MVRV sem fonte gratuita confiavel configurada.")
         return flags
 
     def copy_report(self):
@@ -3484,6 +3903,191 @@ del "%~f0" > nul 2> nul
         label = translate_fear_greed(current.get("value_classification"))
         if value:
             self.value_vars["fear_greed"].set(f"{value} - {label}")
+            self.metrics["fear_greed_value"] = self.to_float(value)
+            self.metrics["fear_greed_label"] = label
+
+    def apply_mvrv(self):
+        data = self.load_mvrv_data()
+        value = data.get("z_score") if data else None
+        source = data.get("source") if data else None
+        updated_at = data.get("updated_at") if data else None
+        self.metrics["mvrv_z_score"] = value
+        self.metrics["mvrv_source"] = source
+
+        if "mvrv_z_score" in self.macro_vars:
+            self.macro_vars["mvrv_z_score"].set(format_number(value, 2) if value is not None else "--")
+        if "mvrv_source" in self.macro_vars:
+            self.macro_vars["mvrv_source"].set(source or "Indisponivel")
+        if hasattr(self, "mvrv_text"):
+            if value is None:
+                lines = [
+                    "Dado MVRV indisponivel na fonte gratuita atual.",
+                    "Status: preparado para JSON, CSV, entrada manual ou API futura.",
+                    f"JSON local: {MVRV_FILE}",
+                    f"CSV local: {MVRV_CSV_FILE}",
+                    "Fontes pagas futuras: Glassnode, CryptoQuant, Coin Metrics Pro ou similar.",
+                ]
+            else:
+                lines = [
+                    f"Z-Score: {format_number(value, 2)}",
+                    f"Fonte: {source or 'manual/local'}",
+                    f"Atualizado em: {updated_at or '--'}",
+                    "O valor e exibido como dado informativo, sem recomendacao financeira.",
+                ]
+            self.write_text_widget(self.mvrv_text, lines, prefix="- ")
+
+    def load_mvrv_data(self):
+        def normalize(candidate, source_label):
+            if not isinstance(candidate, dict):
+                return {}
+            value = (
+                candidate.get("z_score")
+                if candidate.get("z_score") is not None
+                else candidate.get("mvrv_z_score")
+                if candidate.get("mvrv_z_score") is not None
+                else candidate.get("value")
+            )
+            parsed = self.to_float(str(value).replace(",", ".") if value is not None else None)
+            if parsed is None:
+                return {}
+            return {
+                "z_score": parsed,
+                "source": candidate.get("source") or source_label,
+                "updated_at": candidate.get("updated_at") or candidate.get("date") or candidate.get("timestamp"),
+            }
+
+        # Future paid providers should be plugged in here, server-side or with protected keys.
+        try:
+            if MVRV_FILE.exists():
+                data = json.loads(MVRV_FILE.read_text(encoding="utf-8"))
+                normalized = normalize(data, "mvrv.json")
+                if normalized:
+                    return normalized
+        except Exception as exc:
+            self.add_event("MVRV", f"Nao foi possivel ler mvrv.json: {exc}")
+
+        try:
+            if MVRV_CSV_FILE.exists():
+                with open(MVRV_CSV_FILE, newline="", encoding="utf-8-sig") as file:
+                    rows = list(csv.DictReader(file))
+                for row in reversed(rows):
+                    normalized = normalize(row, "mvrv.csv")
+                    if normalized:
+                        return normalized
+        except Exception as exc:
+            self.add_event("MVRV", f"Nao foi possivel ler mvrv.csv: {exc}")
+
+        manual = normalize(
+            {
+                "z_score": self.settings.get("mvrv_manual_z_score"),
+                "source": self.settings.get("mvrv_source") or "manual",
+                "updated_at": "preferencias locais",
+            },
+            "manual",
+        )
+        return manual
+
+    def apply_quick_summary(self):
+        if not self.summary_vars:
+            return
+        daily_snapshot = calculate_indicators(self.indicator_candles.get("Diario", []))
+        weekly_snapshot = calculate_indicators(self.indicator_candles.get("Semanal", []))
+        close = daily_snapshot.get("last_close") or self.metrics.get("price_usd")
+        distance_ma200 = daily_snapshot.get("distance_ma200")
+        weekly_distance = weekly_snapshot.get("distance_ma200")
+        rsi = daily_snapshot.get("rsi14")
+        fear_value = self.metrics.get("fear_greed_value")
+        fear_label = self.metrics.get("fear_greed_label")
+        fee_fastest = self.metrics.get("fee_fastest")
+        volatility = self.metrics.get("volatility_30d")
+        funding = self.metrics.get("funding_rate_pct")
+        oi_7d = self.metrics.get("open_interest_7d")
+        mvrv = self.metrics.get("mvrv_z_score")
+
+        if distance_ma200 is None:
+            trend_label = "Aguardando MM200"
+        elif distance_ma200 >= 12:
+            trend_label = "Acima da MM200"
+        elif distance_ma200 >= 0:
+            trend_label = "Levemente acima"
+        elif distance_ma200 <= -12:
+            trend_label = "Abaixo da MM200"
+        else:
+            trend_label = "Levemente abaixo"
+
+        if fear_value is None:
+            sentiment_label = "Sem Fear & Greed"
+        else:
+            sentiment_label = f"{format_number(fear_value, 0)} - {fear_label or '--'}"
+
+        if fee_fastest is None:
+            network_label = "Sem fee recente"
+        elif fee_fastest < 15:
+            network_label = "Fees baixas"
+        elif fee_fastest < 50:
+            network_label = "Fees moderadas"
+        else:
+            network_label = "Fees elevadas"
+
+        if volatility is None:
+            volatility_label = "Sem volatilidade"
+        elif volatility >= 80:
+            volatility_label = "Alta"
+        elif volatility <= 35:
+            volatility_label = "Comprimida"
+        else:
+            volatility_label = "Normal"
+
+        derivative_alerts = []
+        if funding is not None and funding > 0.05:
+            derivative_alerts.append("funding alto")
+        if oi_7d is not None and oi_7d > 10:
+            derivative_alerts.append("OI acelerando")
+        derivatives_label = ", ".join(derivative_alerts).capitalize() if derivative_alerts else "Sem excesso claro"
+
+        if mvrv is None:
+            mvrv_label = "Indisponivel"
+        elif mvrv >= 7:
+            mvrv_label = "Zona historica quente"
+        elif mvrv <= 0:
+            mvrv_label = "Zona historica fria"
+        else:
+            mvrv_label = "Faixa intermediaria"
+
+        self.summary_vars["trend"].set(trend_label)
+        self.summary_vars["sentiment"].set(sentiment_label)
+        self.summary_vars["network"].set(network_label)
+        self.summary_vars["volatility"].set(volatility_label)
+        self.summary_vars["derivatives"].set(derivatives_label)
+        self.summary_vars["mvrv"].set(mvrv_label)
+
+        lines = [
+            f"Preco atual: {format_currency(close, 'USD')}.",
+            f"Preco vs MM200 diaria: {format_percent(distance_ma200)}.",
+            f"Preco vs MM200 semanal: {format_percent(weekly_distance)}.",
+            f"RSI diario: {format_number(rsi, 1)}.",
+            f"Sentimento Fear & Greed: {sentiment_label}.",
+            f"Rede Bitcoin: {network_label} ({format_number(fee_fastest, 0)} sat/vB na fee rapida).",
+            f"Volatilidade anualizada 30D: {format_percent(volatility)}.",
+            f"Derivativos: funding {format_percent(funding)}, OI 7D {format_percent(oi_7d)}.",
+            f"MVRV Z-Score: {format_number(mvrv, 2)} ({mvrv_label}).",
+            "",
+            "Pontos de atencao:",
+        ]
+        flags = self.build_report_flags(daily_snapshot)
+        if fee_fastest is not None and fee_fastest >= 50:
+            flags.append("Taxas da rede elevadas para uso on-chain.")
+        lines.extend(flags or ["Nenhum filtro critico ativo no momento."])
+        lines.extend(
+            [
+                "",
+                "Dados informativos, nao sao recomendacao financeira.",
+                "Fontes: CoinGecko, Binance, mempool.space, FRED, Alternative.me e RSS PT-BR.",
+            ]
+        )
+        self.write_text_widget(self.summary_text, lines, prefix="- ")
+        if hasattr(self, "summary_updated_var"):
+            self.summary_updated_var.set(f"Atualizado {time.strftime('%H:%M:%S')}")
 
     def render_orderbook(self):
         self.orderbook_text.configure(state="normal")
@@ -3512,7 +4116,7 @@ del "%~f0" > nul 2> nul
             return
 
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill="#0f0e0b", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["chart_bg"], outline="")
 
         if not self.candles:
             canvas.create_text(
@@ -3536,7 +4140,7 @@ del "%~f0" > nul 2> nul
 
         for idx in range(5):
             y = top + (plot_h / 4) * idx
-            canvas.create_line(left, y, width - right, y, fill="#27231b")
+            canvas.create_line(left, y, width - right, y, fill=COLORS["chart_grid"])
             price = max_price - (span / 4) * idx
             canvas.create_text(
                 8,
@@ -3776,7 +4380,7 @@ del "%~f0" > nul 2> nul
             return
 
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill="#0f0e0b", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["chart_bg"], outline="")
         candles = self.indicator_candles.get(self.indicator_period.get(), [])[-260:]
         if not candles:
             canvas.create_text(
@@ -3835,7 +4439,7 @@ del "%~f0" > nul 2> nul
 
         for idx in range(5):
             y = top + (plot_h / 4) * idx
-            canvas.create_line(left, y, width - right, y, fill="#27231b")
+            canvas.create_line(left, y, width - right, y, fill=COLORS["chart_grid"])
             price = max_price - (span / 4) * idx
             canvas.create_text(
                 8,
@@ -3901,7 +4505,7 @@ del "%~f0" > nul 2> nul
                     height - bottom + volume_h - bar_h,
                     x + candle_w / 2,
                     height - bottom + volume_h,
-                    fill="#5c5446",
+                    fill=COLORS["volume_bar"],
                     outline="",
                 )
             canvas.create_text(left, height - 18, text="Volume", fill=COLORS["muted"], anchor="w")
@@ -4151,6 +4755,15 @@ del "%~f0" > nul 2> nul
                 continue
         return DEFAULT_UPDATE_MANIFEST_URL
 
+    def load_settings(self):
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            if SETTINGS_FILE.exists():
+                return normalize_settings(json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+        return normalize_settings({})
+
     def load_alerts(self):
         try:
             APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -4208,6 +4821,52 @@ del "%~f0" > nul 2> nul
             PORTFOLIO_FILE.write_text(json.dumps(self.portfolio, indent=2), encoding="utf-8")
         except Exception as exc:
             self.add_event("Arquivo", f"Nao foi possivel salvar carteira: {exc}")
+
+    def save_settings_from_inputs(self):
+        manual_value = self.mvrv_manual_value.get().strip()
+        if manual_value:
+            parsed = self.to_float(manual_value.replace(",", "."))
+            if parsed is None:
+                messagebox.showwarning(APP_NAME, "Informe um MVRV numerico ou deixe em branco.")
+                return
+            manual_value = str(parsed)
+
+        old_theme = self.settings.get("theme")
+        self.settings = normalize_settings(
+            {
+                "theme": self.theme_choice.get(),
+                "primary_currency": self.primary_currency.get(),
+                "mvrv_manual_z_score": manual_value,
+                "mvrv_source": self.mvrv_source_value.get().strip(),
+            }
+        )
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            SETTINGS_FILE.write_text(json.dumps(self.settings, indent=2), encoding="utf-8")
+            self.settings_status_var.set("Preferencias salvas localmente.")
+            if old_theme != self.settings.get("theme"):
+                self.settings_status_var.set("Preferencias salvas. O tema completo aplica ao reiniciar.")
+            self.refresh_price_currency_display()
+            self.apply_mvrv()
+            self.apply_quick_summary()
+            self.render_report()
+            self.add_event("Preferencias", "Preferencias locais atualizadas.")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Nao foi possivel salvar preferencias: {exc}")
+
+    def refresh_price_currency_display(self):
+        if not hasattr(self, "price_pair_var"):
+            return
+        price_usd = self.metrics.get("price_usd")
+        price_brl = self.metrics.get("price_brl")
+        primary_currency = self.primary_currency.get()
+        self.price_pair_var.set(f"BTC / {primary_currency}")
+        if primary_currency == "BRL":
+            self.price_usd_var.set(format_currency(price_brl, "BRL", 0))
+            self.price_brl_var.set(format_currency(price_usd, "USD"))
+        else:
+            self.price_usd_var.set(format_currency(price_usd, "USD"))
+            self.price_brl_var.set(format_currency(price_brl, "BRL", 0))
 
     def portfolio_number(self, key):
         variable = self.portfolio_inputs.get(key)

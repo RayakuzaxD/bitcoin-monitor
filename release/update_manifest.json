@@ -1,12 +1,15 @@
 {
-    "version":  "0.5.1",
-    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.5.1",
-    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.5.1/BitcoinMonitor.exe",
-    "sha256":  "864dfb3a2a26f4c4fb43faf5e3169dbb001243bf72ac90adfb7485dc0544ffb7",
+    "version":  "0.6.0",
+    "release_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/tag/v0.6.0",
+    "download_url":  "https://github.com/RayakuzaxD/bitcoin-monitor/releases/download/v0.6.0/BitcoinMonitor.exe",
+    "sha256":  "47ffcb143d27c8c845239770abe960d7d7f7e72f9a74a4864bce91da84b604b8",
     "notes":  [
-                  "Noticias agora priorizam fontes em portugues brasileiro.",
-                  "Fontes da aba Noticias: Cointelegraph BR, Livecoins, Portal do Bitcoin, CriptoFacil e BeInCrypto Brasil.",
-                  "Remove fontes RSS em ingles da lista padrao de noticias.",
-                  "Mantem Carteira/Risco, Relatorio 7D/30D e correcoes de empacotamento Windows."
+                  "Nova aba Resumo com leitura simples de mercado, tecnica, rede, derivativos e MVRV.",
+                  "Nova Watchlist preparada para BTC, ETH, SOL e USDT/BRL via CoinGecko com cache.",
+                  "Preferencias locais para moeda principal, tema e MVRV manual.",
+                  "MVRV Z-Score preparado para JSON, CSV, entrada manual ou API paga futura sem inventar dados.",
+                  "Relatorio agora aceita 7D, 30D, 90D e 365D com maxima, minima e drawdown do periodo.",
+                  "Alertas ampliados para RSI diario/semanal, Fear \u0026 Greed, volatilidade e MVRV.",
+                  "Noticias seguem em portugues brasileiro com fontes PT-BR validadas."
               ]
 }
